@@ -148,6 +148,7 @@ def main() -> int:
     time.sleep(0.2)
 
     alerts = gateway_request("GET", "/api/v1/notifications/alerts?status=open", token=token)["alerts"]
+    audit_events = gateway_request("GET", "/api/v1/platform/audit-events?limit=10", token=token)["events"]
     dashboard = gateway_request(
         "GET",
         "/api/v1/analytics/dashboard?portfolio_id={0}".format(portfolio["id"]),
@@ -163,6 +164,7 @@ def main() -> int:
                 "portfolio": portfolio,
                 "projects": [project_alpha, project_beta],
                 "open_alerts": alerts,
+                "audit_events": audit_events,
                 "dashboard": dashboard,
             },
             indent=2,

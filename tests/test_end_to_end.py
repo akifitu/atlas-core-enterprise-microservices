@@ -214,10 +214,11 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.gateway_request("GET", "/api/v1/portfolio/portfolios", token=token)
         topology = self.gateway_request("GET", "/api/v1/platform/topology", token=token)
 
-        self.assertEqual(topology["summary"]["healthy_services"], 7)
+        self.assertEqual(topology["summary"]["healthy_services"], 8)
         self.assertEqual(topology["summary"]["degraded_services"], [])
         self.assertGreaterEqual(topology["auth_cache"]["entries"], 1)
         self.assertGreaterEqual(topology["auth_cache"]["hits"], 1)
+        self.assertIn("audit-service", topology["services"])
         self.assertIn("api-gateway", topology["services"])
         self.assertTrue(all(service["healthy"] for service in topology["services"].values()))
 
@@ -264,6 +265,48 @@ class AtlasCoreE2ETest(unittest.TestCase):
         )
         self.assertEqual(status_code, 403)
         self.assertEqual(payload["error"], "admin_role_required")
+
+    def test_mutations_are_recorded_in_audit_trail(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Audit Tenant")
+        token = bootstrap["token"]
+
+        portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Audit Board"},
+            token=token,
+        )["portfolio"]
+        project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(portfolio["id"]),
+            {
+                "name": "Audit Program",
+                "code": "AUDIT-PROGRAM",
+                "status": "active",
+                "start_date": "2026-05-01",
+                "target_date": "2026-10-01",
+            },
+            token=token,
+        )["project"]
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(project["id"]),
+            {"total_budget": 50000, "currency": "USD"},
+            token=token,
+        )
+
+        events = self.gateway_request(
+            "GET",
+            "/api/v1/platform/audit-events?limit=20",
+            token=token,
+        )["events"]
+
+        self.assertGreaterEqual(len(events), 3)
+        self.assertTrue(any(event["service_name"] == "portfolio-service" for event in events))
+        self.assertTrue(any(event["service_name"] == "finance-service" for event in events))
+        self.assertTrue(any(event["resource"] == "portfolio" for event in events))
+        self.assertTrue(any(event["entity_id"] == portfolio["id"] for event in events))
+        self.assertTrue(all(event["tenant_id"] == bootstrap["tenant"]["id"] for event in events))
 
 
 if __name__ == "__main__":

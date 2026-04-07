@@ -19,6 +19,7 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:7004
       NOTIFICATION_SERVICE_URL: http://notification-service:7005
       ANALYTICS_SERVICE_URL: http://analytics-service:7006
+      AUDIT_SERVICE_URL: http://audit-service:7007
 
   portfolio-service:
     image: python:3.9-slim
@@ -38,6 +39,7 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:7004
       NOTIFICATION_SERVICE_URL: http://notification-service:7005
       ANALYTICS_SERVICE_URL: http://analytics-service:7006
+      AUDIT_SERVICE_URL: http://audit-service:7007
 
   delivery-service:
     image: python:3.9-slim
@@ -57,6 +59,7 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:7004
       NOTIFICATION_SERVICE_URL: http://notification-service:7005
       ANALYTICS_SERVICE_URL: http://analytics-service:7006
+      AUDIT_SERVICE_URL: http://audit-service:7007
 
   finance-service:
     image: python:3.9-slim
@@ -76,6 +79,7 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:7004
       NOTIFICATION_SERVICE_URL: http://notification-service:7005
       ANALYTICS_SERVICE_URL: http://analytics-service:7006
+      AUDIT_SERVICE_URL: http://audit-service:7007
 
   notification-service:
     image: python:3.9-slim
@@ -95,6 +99,7 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:7004
       NOTIFICATION_SERVICE_URL: http://notification-service:7005
       ANALYTICS_SERVICE_URL: http://analytics-service:7006
+      AUDIT_SERVICE_URL: http://audit-service:7007
 
   analytics-service:
     image: python:3.9-slim
@@ -108,6 +113,28 @@ services:
       PYTHONPATH: /app
       ANALYTICS_SERVICE_HOST: 0.0.0.0
       ANALYTICS_SERVICE_PORT: 7006
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
+      AUDIT_SERVICE_URL: http://audit-service:7007
+
+  audit-service:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/audit_service/app.py"]
+    ports:
+      - "7007:7007"
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONPATH: /app
+      AUDIT_SERVICE_HOST: 0.0.0.0
+      AUDIT_SERVICE_PORT: 7007
+      AUDIT_SERVICE_URL: http://audit-service:7007
+      AUDIT_SERVICE_TOKEN: atlas-internal-audit
       IDENTITY_SERVICE_URL: http://identity-service:7001
       PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
       DELIVERY_SERVICE_URL: http://delivery-service:7003
@@ -130,6 +157,7 @@ services:
       - finance-service
       - notification-service
       - analytics-service
+      - audit-service
     environment:
       PYTHONPATH: /app
       API_GATEWAY_HOST: 0.0.0.0
@@ -140,3 +168,5 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:7004
       NOTIFICATION_SERVICE_URL: http://notification-service:7005
       ANALYTICS_SERVICE_URL: http://analytics-service:7006
+      AUDIT_SERVICE_URL: http://audit-service:7007
+      AUDIT_SERVICE_TOKEN: atlas-internal-audit

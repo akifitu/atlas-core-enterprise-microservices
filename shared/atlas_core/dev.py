@@ -80,6 +80,16 @@ SERVICES: List[ServiceSpec] = [
         url_env="ANALYTICS_SERVICE_URL",
     ),
     ServiceSpec(
+        name="audit-service",
+        script_path="services/audit_service/app.py",
+        host_env="AUDIT_SERVICE_HOST",
+        port_env="AUDIT_SERVICE_PORT",
+        port=7007,
+        url_env="AUDIT_SERVICE_URL",
+        db_env="AUDIT_DB_PATH",
+        db_filename="audit-service.db",
+    ),
+    ServiceSpec(
         name="api-gateway",
         script_path="services/api_gateway/app.py",
         host_env="API_GATEWAY_HOST",
@@ -97,6 +107,7 @@ def build_runtime_environment(root_dir: Path, runtime_dir: Path) -> Dict[str, st
 
     runtime_dir.mkdir(parents=True, exist_ok=True)
     env["PYTHONPYCACHEPREFIX"] = str(runtime_dir / "pycache")
+    env["AUDIT_SERVICE_TOKEN"] = env.get("AUDIT_SERVICE_TOKEN", "atlas-internal-audit")
 
     for spec in SERVICES:
         env[spec.host_env] = "127.0.0.1"

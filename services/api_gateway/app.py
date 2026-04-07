@@ -18,13 +18,17 @@ DELIVERY_SERVICE_URL = service_url("delivery-service", 7003)
 FINANCE_SERVICE_URL = service_url("finance-service", 7004)
 NOTIFICATION_SERVICE_URL = service_url("notification-service", 7005)
 ANALYTICS_SERVICE_URL = service_url("analytics-service", 7006)
+AUDIT_SERVICE_URL = service_url("audit-service", 7007)
+AUDIT_SERVICE_TOKEN = env("AUDIT_SERVICE_TOKEN", "atlas-internal-audit") or "atlas-internal-audit"
 AUTH_CACHE_TTL_SECONDS = env("API_GATEWAY_AUTH_CACHE_TTL_SECONDS", 30, int) or 30
 AUTH_CACHE_MAX_ENTRIES = env("API_GATEWAY_AUTH_CACHE_MAX_ENTRIES", 1024, int) or 1024
 
 app = ServiceApp(SERVICE_NAME)
 AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
 AUTH_CACHE_STATS = {"hits": 0, "misses": 0}
+AUDIT_STATS = {"recorded": 0, "failed": 0}
 AUTH_CACHE_LOCK = Lock()
+AUDIT_STATS_LOCK = Lock()
 
 DEPENDENCIES = {
     "identity-service": IDENTITY_SERVICE_URL,
@@ -33,6 +37,7 @@ DEPENDENCIES = {
     "finance-service": FINANCE_SERVICE_URL,
     "notification-service": NOTIFICATION_SERVICE_URL,
     "analytics-service": ANALYTICS_SERVICE_URL,
+    "audit-service": AUDIT_SERVICE_URL,
 }
 
 
@@ -61,6 +66,11 @@ def auth_cache_snapshot() -> Dict[str, Any]:
             "ttl_seconds": AUTH_CACHE_TTL_SECONDS,
             "max_entries": AUTH_CACHE_MAX_ENTRIES,
         }
+
+
+def audit_stats_snapshot() -> Dict[str, Any]:
+    with AUDIT_STATS_LOCK:
+        return dict(AUDIT_STATS)
 
 
 def require_platform_operator(request: Request) -> Dict[str, Any]:
@@ -112,8 +122,10 @@ def proxy_request(
     authenticated: bool = True,
 ) -> Any:
     headers: Dict[str, str] = {}
+    actor_context = None
     if authenticated:
         context = authenticate(request)
+        actor_context = context
         headers.update(
             {
                 "X-Tenant-ID": context["tenant_id"],
@@ -136,7 +148,93 @@ def proxy_request(
         payload=request.body if isinstance(request.body, dict) else None,
         headers=headers,
     )
+    if actor_context and request.method in ("POST", "PATCH", "PUT", "DELETE"):
+        record_audit_event(request, actor_context, service_url_value, internal_path, status_code, payload)
     return status_code, payload
+
+
+def service_name_from_url(base_url: str) -> str:
+    for service_name, url_value in DEPENDENCIES.items():
+        if url_value == base_url:
+            return service_name
+    return "unknown-service"
+
+
+def infer_resource_from_path(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 3 and parts[0] == "api" and parts[1] == "v1":
+        if parts[2] == "platform" and len(parts) >= 4:
+            return parts[3]
+        return parts[2]
+    return parts[-1] if parts else "root"
+
+
+def infer_action(method: str, path: str) -> str:
+    normalized = infer_resource_from_path(path).replace("-", "_")
+    mapping = {
+        "POST": "create",
+        "PATCH": "update",
+        "PUT": "replace",
+        "DELETE": "delete",
+    }
+    return "{0}_{1}".format(mapping.get(method.upper(), "access"), normalized)
+
+
+def extract_entity_reference(payload: Any) -> Dict[str, Optional[str]]:
+    if not isinstance(payload, dict):
+        return {"entity_type": None, "entity_id": None}
+    for key, value in payload.items():
+        if isinstance(value, dict) and isinstance(value.get("id"), str):
+            return {"entity_type": key, "entity_id": value["id"]}
+    return {"entity_type": None, "entity_id": None}
+
+
+def record_audit_event(
+    request: Request,
+    actor_context: Dict[str, Any],
+    service_url_value: str,
+    internal_path: str,
+    status_code: int,
+    payload: Any,
+) -> None:
+    entity_reference = extract_entity_reference(payload)
+    metadata = {
+        "downstream_path": internal_path,
+        "response_error": payload.get("error") if isinstance(payload, dict) else None,
+        "query": request.query,
+    }
+    audit_payload = {
+        "tenant_id": actor_context["tenant_id"],
+        "actor_user_id": actor_context["user_id"],
+        "actor_role": actor_context["role"],
+        "request_id": request.request_id,
+        "method": request.method,
+        "path": request.path,
+        "resource": infer_resource_from_path(request.path),
+        "action": infer_action(request.method, request.path),
+        "service_name": service_name_from_url(service_url_value),
+        "status_code": status_code,
+        "outcome": "success" if status_code < 400 else "rejected",
+        "entity_type": entity_reference["entity_type"],
+        "entity_id": entity_reference["entity_id"],
+        "metadata": metadata,
+    }
+    audit_status, _ = request_json(
+        "POST",
+        AUDIT_SERVICE_URL,
+        "/events",
+        payload=audit_payload,
+        headers={
+            "X-Request-ID": request.request_id,
+            "X-Audit-Token": AUDIT_SERVICE_TOKEN,
+        },
+        timeout=2,
+    )
+    with AUDIT_STATS_LOCK:
+        if audit_status < 400:
+            AUDIT_STATS["recorded"] += 1
+        else:
+            AUDIT_STATS["failed"] += 1
 
 
 def dependency_health(service_name: str, base_url: str, request_id: str) -> Dict[str, Any]:
@@ -160,7 +258,12 @@ def dependency_health(service_name: str, base_url: str, request_id: str) -> Dict
 
 @app.route("GET", "/health")
 def health(_: Request):
-    return 200, {"status": "ok", "service": SERVICE_NAME, "auth_cache": auth_cache_snapshot()}
+    return 200, {
+        "status": "ok",
+        "service": SERVICE_NAME,
+        "auth_cache": auth_cache_snapshot(),
+        "audit": audit_stats_snapshot(),
+    }
 
 
 @app.route("GET", "/api/v1/platform/topology")
@@ -182,11 +285,18 @@ def topology(request: Request):
         "generated_at": utc_now(),
         "services": services,
         "auth_cache": auth_cache_snapshot(),
+        "audit": audit_stats_snapshot(),
         "summary": {
             "healthy_services": len(services) - len(degraded_services),
             "degraded_services": degraded_services,
         },
     }
+
+
+@app.route("GET", "/api/v1/platform/audit-events")
+def list_audit_events(request: Request):
+    require_platform_operator(request)
+    return proxy_request(request, AUDIT_SERVICE_URL, "/events")
 
 
 @app.route("POST", "/api/v1/identity/bootstrap-admin")
