@@ -186,6 +186,13 @@ h2 {
   gap: 16px;
 }
 
+.action-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
 .field-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -467,6 +474,25 @@ button:hover {
   font-size: 0.76rem;
 }
 
+.result-block {
+  padding: 16px 18px;
+  border: 1px solid rgba(24, 35, 44, 0.08);
+  border-radius: var(--atlas-radius-sm);
+  background: var(--atlas-panel-strong);
+}
+
+.result-code {
+  margin: 12px 0 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(24, 35, 44, 0.92);
+  color: #f5efe6;
+  overflow-x: auto;
+  font-family: var(--atlas-mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -502,7 +528,8 @@ button:hover {
   }
 
   .hero-metrics,
-  .field-row {
+  .field-row,
+  .action-toolbar {
     grid-template-columns: 1fr;
   }
 

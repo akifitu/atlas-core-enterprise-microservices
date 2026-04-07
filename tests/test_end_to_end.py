@@ -262,6 +262,7 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(js_status, 200)
         self.assertIn("application/javascript", js_type)
         self.assertIn("/api/v1/platform/control-room", js_body)
+        self.assertIn("/api/v1/platform/control-room/actions", js_body)
         self.assertEqual(js_headers["X-Frame-Options"], "DENY")
 
     def test_control_room_endpoint_aggregates_operator_views(self) -> None:
@@ -329,6 +330,66 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(control_room["executive_summary"]["totals"]["projects"], 1)
         self.assertEqual(control_room["portfolio_dashboard"]["portfolio"]["id"], portfolio["id"])
         self.assertEqual(control_room["portfolio_dashboard"]["totals"]["blocked_work_items"], 1)
+
+    def test_control_room_actions_execute_export_and_retention(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Control Action Tenant")
+        token = bootstrap["token"]
+
+        portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Control Action Portfolio"},
+            token=token,
+        )["portfolio"]
+        project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(portfolio["id"]),
+            {
+                "name": "Control Action Program",
+                "code": "CONTROL-ACTION",
+                "status": "active",
+                "start_date": "2026-06-01",
+                "target_date": "2026-12-01",
+            },
+            token=token,
+        )["project"]
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(project["id"]),
+            {"total_budget": 90000, "currency": "USD"},
+            token=token,
+        )
+
+        export_action = self.gateway_request(
+            "POST",
+            "/api/v1/platform/control-room/actions",
+            {"action": "audit_export", "limit": 5, "top_n": 3, "portfolio_id": portfolio["id"]},
+            token=token,
+        )
+        self.assertEqual(export_action["action"], "audit_export")
+        self.assertGreaterEqual(export_action["result"]["count"], 3)
+        self.assertEqual(export_action["control_room"]["selected_portfolio_id"], portfolio["id"])
+
+        preview_action = self.gateway_request(
+            "POST",
+            "/api/v1/platform/control-room/actions",
+            {"action": "audit_retention_dry_run", "retention_days": 0, "top_n": 3},
+            token=token,
+        )
+        self.assertEqual(preview_action["action"], "audit_retention_dry_run")
+        self.assertTrue(preview_action["result"]["dry_run"])
+        self.assertGreaterEqual(preview_action["result"]["would_delete"], 3)
+
+        apply_action = self.gateway_request(
+            "POST",
+            "/api/v1/platform/control-room/actions",
+            {"action": "audit_retention_apply", "retention_days": 0, "top_n": 3},
+            token=token,
+        )
+        self.assertEqual(apply_action["action"], "audit_retention_apply")
+        self.assertFalse(apply_action["result"]["dry_run"])
+        self.assertGreaterEqual(apply_action["result"]["deleted_count"], 3)
+        self.assertLess(apply_action["control_room"]["audit_summary"]["total_events"], preview_action["control_room"]["audit_summary"]["total_events"])
 
     def test_viewer_role_cannot_mutate_portfolio(self) -> None:
         bootstrap = self.bootstrap_admin_session("Atlas Viewer Tenant")

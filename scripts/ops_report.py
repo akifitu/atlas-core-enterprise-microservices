@@ -16,6 +16,7 @@ from shared.atlas_core.service_client import request_json
 GATEWAY_URL = env("API_GATEWAY_URL", "http://127.0.0.1:7000") or "http://127.0.0.1:7000"
 REPORT_NAMES = {
     "overview",
+    "control-room",
     "topology",
     "alert-summary",
     "audit-summary",
@@ -96,17 +97,19 @@ def main() -> int:
     retention_days = parsed_args["retention_days"]
     if not token:
         print(
-            "Usage: ATLAS_TOKEN=<token> python3 scripts/ops_report.py [overview|topology|alert-summary|audit-summary|audit-export|audit-retention-dry-run|audit-retention-apply] [retention_days]",
+            "Usage: ATLAS_TOKEN=<token> python3 scripts/ops_report.py [overview|control-room|topology|alert-summary|audit-summary|audit-export|audit-retention-dry-run|audit-retention-apply] [retention_days]",
             file=sys.stderr,
         )
         print(
-            "   or: python3 scripts/ops_report.py [overview|topology|alert-summary|audit-summary|audit-export|audit-retention-dry-run|audit-retention-apply] <token> [retention_days]",
+            "   or: python3 scripts/ops_report.py [overview|control-room|topology|alert-summary|audit-summary|audit-export|audit-retention-dry-run|audit-retention-apply] <token> [retention_days]",
             file=sys.stderr,
         )
         return 1
 
     try:
-        if report_name == "topology":
+        if report_name == "control-room":
+            payload = fetch_report(token, "/api/v1/platform/control-room?top_n=5")
+        elif report_name == "topology":
             payload = fetch_report(token, "/api/v1/platform/topology")
         elif report_name == "alert-summary":
             payload = fetch_report(token, "/api/v1/platform/alert-summary")
@@ -127,10 +130,13 @@ def main() -> int:
                 {"retention_days": retention_days, "dry_run": False},
             )
         else:
+            control_room = fetch_report(token, "/api/v1/platform/control-room?top_n=5")
             payload = {
-                "topology": fetch_report(token, "/api/v1/platform/topology"),
-                "alert_summary": fetch_report(token, "/api/v1/platform/alert-summary"),
-                "audit_summary": fetch_report(token, "/api/v1/platform/audit-summary"),
+                "topology": control_room["topology"],
+                "alert_summary": {"summary": control_room["alert_summary"]},
+                "audit_summary": {"summary": control_room["audit_summary"]},
+                "selected_portfolio_id": control_room["selected_portfolio_id"],
+                "selection_mode": control_room["selection_mode"],
             }
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)

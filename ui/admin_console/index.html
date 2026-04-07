@@ -84,6 +84,32 @@
     </section>
 
     <main class="dashboard">
+      <section class="panel wide" aria-labelledby="actions-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Operator Actions</p>
+          <h2 id="actions-title">Run governance controls</h2>
+        </div>
+        <div class="action-toolbar">
+          <label class="field">
+            <span>Audit export limit</span>
+            <input id="audit-export-limit" name="audit_export_limit" type="number" min="1" max="1000" value="100">
+          </label>
+          <label class="field">
+            <span>Retention days</span>
+            <input id="retention-days-input" name="retention_days" type="number" min="0" max="3650" value="30">
+          </label>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="run-audit-export" type="button">Export audit snapshot</button>
+          <button class="ghost" id="preview-retention" type="button">Preview retention impact</button>
+          <button class="primary" id="apply-retention" type="button">Apply retention purge</button>
+        </div>
+        <div class="summary-strip" id="action-summary"></div>
+        <div class="list-block" id="action-detail">
+          <p class="empty-state">Run an operator action to inspect export samples or retention impact.</p>
+        </div>
+      </section>
+
       <section class="panel" aria-labelledby="topology-title">
         <div class="panel-heading">
           <p class="eyebrow">Platform</p>

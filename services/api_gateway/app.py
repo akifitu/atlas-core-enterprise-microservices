@@ -44,6 +44,11 @@ ADMIN_CONSOLE_ASSETS = {
     "styles.css": "text/css; charset=utf-8",
     "app.js": "application/javascript; charset=utf-8",
 }
+CONTROL_ROOM_ACTIONS = {
+    "audit_export",
+    "audit_retention_dry_run",
+    "audit_retention_apply",
+}
 
 DEPENDENCIES = {
     "identity-service": IDENTITY_SERVICE_URL,
@@ -269,6 +274,33 @@ def actor_headers(actor_context: Dict[str, Any], request_id: str) -> Dict[str, s
     }
 
 
+def require_json_object(request: Request) -> Dict[str, Any]:
+    if not isinstance(request.body, dict):
+        raise AppError(400, "json_object_required")
+    return request.body
+
+
+def optional_string_field(payload: Dict[str, Any], field_name: str) -> Optional[str]:
+    value = payload.get(field_name)
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise AppError(400, "invalid_field", {"field": field_name})
+    return value
+
+
+def require_bounded_int(value: Any, field_name: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AppError(400, "invalid_field", {"field": field_name})
+    if value < minimum or value > maximum:
+        raise AppError(
+            400,
+            "invalid_field",
+            {"field": field_name, "minimum": minimum, "maximum": maximum},
+        )
+    return value
+
+
 def proxy_request(
     request: Request,
     service_url_value: str,
@@ -341,6 +373,25 @@ def extract_entity_reference(payload: Any) -> Dict[str, Optional[str]]:
     return {"entity_type": None, "entity_id": None}
 
 
+def submit_audit_payload(request_id: str, audit_payload: Dict[str, Any]) -> None:
+    audit_status, _ = request_json(
+        "POST",
+        AUDIT_SERVICE_URL,
+        "/events",
+        payload=audit_payload,
+        headers={
+            "X-Request-ID": request_id,
+            "X-Audit-Token": AUDIT_SERVICE_TOKEN,
+        },
+        timeout=2,
+    )
+    with AUDIT_STATS_LOCK:
+        if audit_status < 400:
+            AUDIT_STATS["recorded"] += 1
+        else:
+            AUDIT_STATS["failed"] += 1
+
+
 def record_audit_event(
     request: Request,
     actor_context: Dict[str, Any],
@@ -371,22 +422,36 @@ def record_audit_event(
         "entity_id": entity_reference["entity_id"],
         "metadata": metadata,
     }
-    audit_status, _ = request_json(
-        "POST",
-        AUDIT_SERVICE_URL,
-        "/events",
-        payload=audit_payload,
-        headers={
-            "X-Request-ID": request.request_id,
-            "X-Audit-Token": AUDIT_SERVICE_TOKEN,
+    submit_audit_payload(request.request_id, audit_payload)
+
+
+def record_control_room_action(
+    request: Request,
+    actor_context: Dict[str, Any],
+    action_name: str,
+    status_code: int,
+    payload: Any,
+) -> None:
+    audit_payload = {
+        "tenant_id": actor_context["tenant_id"],
+        "actor_user_id": actor_context["user_id"],
+        "actor_role": actor_context["role"],
+        "request_id": request.request_id,
+        "method": request.method,
+        "path": request.path,
+        "resource": "control_room",
+        "action": action_name,
+        "service_name": SERVICE_NAME,
+        "status_code": status_code,
+        "outcome": "success" if status_code < 400 else "rejected",
+        "entity_type": None,
+        "entity_id": None,
+        "metadata": {
+            "response_error": payload.get("error") if isinstance(payload, dict) else None,
+            "query": request.query,
         },
-        timeout=2,
-    )
-    with AUDIT_STATS_LOCK:
-        if audit_status < 400:
-            AUDIT_STATS["recorded"] += 1
-        else:
-            AUDIT_STATS["failed"] += 1
+    }
+    submit_audit_payload(request.request_id, audit_payload)
 
 
 def dependency_health(service_name: str, base_url: str, request_id: str) -> Dict[str, Any]:
@@ -483,6 +548,83 @@ def select_control_room_portfolio(executive_summary_payload: Dict[str, Any], req
     return {"portfolio_id": None, "selection_mode": "none"}
 
 
+def control_room_top_n_from_payload(payload: Dict[str, Any]) -> int:
+    return require_bounded_int(payload.get("top_n", 5), "top_n", 1, 20)
+
+
+def post_operator_payload(
+    service_name: str,
+    base_url: str,
+    path: str,
+    headers: Dict[str, str],
+    payload: Dict[str, Any],
+) -> Any:
+    return require_dependency_success(
+        *request_json("POST", base_url, path, payload=payload, headers=headers),
+        dependency_name=service_name,
+    )
+
+
+def build_control_room_payload(
+    request_id: str,
+    actor_context: Dict[str, Any],
+    top_n: int,
+    requested_portfolio_id: Optional[str],
+) -> Dict[str, Any]:
+    headers = actor_headers(actor_context, request_id)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        topology_future = executor.submit(platform_topology_payload, request_id)
+        alert_summary_future = executor.submit(
+            fetch_operator_payload,
+            "notification-service",
+            NOTIFICATION_SERVICE_URL,
+            "/alerts/summary",
+            headers,
+        )
+        audit_summary_future = executor.submit(
+            fetch_operator_payload,
+            "audit-service",
+            AUDIT_SERVICE_URL,
+            "/summary",
+            headers,
+        )
+        executive_summary_future = executor.submit(
+            fetch_operator_payload,
+            "analytics-service",
+            ANALYTICS_SERVICE_URL,
+            "/executive-summary?{0}".format(urlencode({"top_n": top_n})),
+            headers,
+        )
+
+        topology_payload = topology_future.result()
+        alert_summary_payload = alert_summary_future.result()
+        audit_summary_payload = audit_summary_future.result()
+        executive_summary_payload = executive_summary_future.result()
+
+    portfolio_selection = select_control_room_portfolio(executive_summary_payload, requested_portfolio_id)
+    selected_portfolio_id = portfolio_selection["portfolio_id"]
+    portfolio_dashboard_payload = None
+    if selected_portfolio_id:
+        portfolio_dashboard_payload = fetch_operator_payload(
+            "analytics-service",
+            ANALYTICS_SERVICE_URL,
+            "/dashboard?{0}".format(urlencode({"portfolio_id": selected_portfolio_id})),
+            headers,
+        )
+
+    return {
+        "generated_at": utc_now(),
+        "topology": topology_payload,
+        "alert_summary": alert_summary_payload["summary"],
+        "audit_summary": audit_summary_payload["summary"],
+        "executive_summary": executive_summary_payload,
+        "selected_portfolio_id": selected_portfolio_id,
+        "selection_mode": portfolio_selection["selection_mode"],
+        "portfolio_dashboard": portfolio_dashboard_payload,
+    }
+
+
 @app.route("GET", "/health")
 def health(_: Request):
     return 200, {
@@ -525,57 +667,53 @@ def control_room(request: Request):
     actor_context = require_platform_operator(request)
     top_n = get_control_room_top_n(request)
     requested_portfolio_id = request.query_value("portfolio_id")
+    return 200, build_control_room_payload(request.request_id, actor_context, top_n, requested_portfolio_id)
+
+
+@app.route("POST", "/api/v1/platform/control-room/actions")
+def control_room_actions(request: Request):
+    actor_context = require_platform_operator(request)
+    payload = require_json_object(request)
+    action_name = optional_string_field(payload, "action")
+    if action_name not in CONTROL_ROOM_ACTIONS:
+        raise AppError(
+            400,
+            "invalid_control_room_action",
+            {"allowed_actions": sorted(CONTROL_ROOM_ACTIONS)},
+        )
+
+    top_n = control_room_top_n_from_payload(payload)
+    requested_portfolio_id = optional_string_field(payload, "portfolio_id")
     headers = actor_headers(actor_context, request.request_id)
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        topology_future = executor.submit(platform_topology_payload, request.request_id)
-        alert_summary_future = executor.submit(
-            fetch_operator_payload,
-            "notification-service",
-            NOTIFICATION_SERVICE_URL,
-            "/alerts/summary",
-            headers,
-        )
-        audit_summary_future = executor.submit(
-            fetch_operator_payload,
+    if action_name == "audit_export":
+        limit = require_bounded_int(payload.get("limit", 100), "limit", 1, 1000)
+        result = fetch_operator_payload(
             "audit-service",
             AUDIT_SERVICE_URL,
-            "/summary",
+            "/events/export?{0}".format(urlencode({"limit": limit})),
             headers,
         )
-        executive_summary_future = executor.submit(
-            fetch_operator_payload,
-            "analytics-service",
-            ANALYTICS_SERVICE_URL,
-            "/executive-summary?{0}".format(urlencode({"top_n": top_n})),
+    else:
+        retention_days = require_bounded_int(payload.get("retention_days"), "retention_days", 0, 3650)
+        result = post_operator_payload(
+            "audit-service",
+            AUDIT_SERVICE_URL,
+            "/retention/purge",
             headers,
+            {
+                "retention_days": retention_days,
+                "dry_run": action_name == "audit_retention_dry_run",
+            },
         )
-
-        topology_payload = topology_future.result()
-        alert_summary_payload = alert_summary_future.result()
-        audit_summary_payload = audit_summary_future.result()
-        executive_summary_payload = executive_summary_future.result()
-
-    portfolio_selection = select_control_room_portfolio(executive_summary_payload, requested_portfolio_id)
-    selected_portfolio_id = portfolio_selection["portfolio_id"]
-    portfolio_dashboard_payload = None
-    if selected_portfolio_id:
-        portfolio_dashboard_payload = fetch_operator_payload(
-            "analytics-service",
-            ANALYTICS_SERVICE_URL,
-            "/dashboard?{0}".format(urlencode({"portfolio_id": selected_portfolio_id})),
-            headers,
-        )
+        if action_name == "audit_retention_apply":
+            record_control_room_action(request, actor_context, action_name, 200, result)
 
     return 200, {
+        "action": action_name,
         "generated_at": utc_now(),
-        "topology": topology_payload,
-        "alert_summary": alert_summary_payload["summary"],
-        "audit_summary": audit_summary_payload["summary"],
-        "executive_summary": executive_summary_payload,
-        "selected_portfolio_id": selected_portfolio_id,
-        "selection_mode": portfolio_selection["selection_mode"],
-        "portfolio_dashboard": portfolio_dashboard_payload,
+        "result": result,
+        "control_room": build_control_room_payload(request.request_id, actor_context, top_n, requested_portfolio_id),
     }
 
 

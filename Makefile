@@ -2,7 +2,7 @@ PYTHON ?= python3
 PYCACHE_PREFIX ?= /tmp/pycache
 RETENTION_DAYS ?= 30
 
-.PHONY: run demo ops ops-topology ops-alert-summary ops-audit-summary ops-audit-export ops-audit-retention-dry-run ops-audit-retention-apply test compile ci
+.PHONY: run demo ops ops-control-room ops-topology ops-alert-summary ops-audit-summary ops-audit-export ops-audit-retention-dry-run ops-audit-retention-apply test compile ci
 
 run:
 	$(PYTHON) scripts/dev_runner.py --reset-data
@@ -12,6 +12,9 @@ demo:
 
 ops:
 	$(PYTHON) scripts/ops_report.py
+
+ops-control-room:
+	$(PYTHON) scripts/ops_report.py control-room
 
 ops-topology:
 	$(PYTHON) scripts/ops_report.py topology

@@ -1,17 +1,22 @@
 const ENDPOINTS = {
   controlRoom: "/api/v1/platform/control-room",
+  controlRoomActions: "/api/v1/platform/control-room/actions",
 };
 
 const STORAGE_KEYS = {
   token: "atlas_control_room_token",
   topN: "atlas_control_room_top_n",
   portfolioId: "atlas_control_room_portfolio_id",
+  exportLimit: "atlas_control_room_export_limit",
+  retentionDays: "atlas_control_room_retention_days",
 };
 
 const state = {
   token: "",
   topN: 5,
   selectedPortfolioId: "",
+  exportLimit: 100,
+  retentionDays: 30,
   executive: null,
 };
 
@@ -21,9 +26,16 @@ const elements = {
   tokenInput: document.getElementById("token-input"),
   topNInput: document.getElementById("top-n-input"),
   portfolioSelect: document.getElementById("portfolio-select"),
+  auditExportLimitInput: document.getElementById("audit-export-limit"),
+  retentionDaysInput: document.getElementById("retention-days-input"),
   refreshPortfolio: document.getElementById("refresh-portfolio"),
   clearSession: document.getElementById("clear-session"),
+  runAuditExport: document.getElementById("run-audit-export"),
+  previewRetention: document.getElementById("preview-retention"),
+  applyRetention: document.getElementById("apply-retention"),
   statusBar: document.getElementById("status-bar"),
+  actionSummary: document.getElementById("action-summary"),
+  actionDetail: document.getElementById("action-detail"),
   topologySummary: document.getElementById("topology-summary"),
   topologyGrid: document.getElementById("topology-grid"),
   alertsSummary: document.getElementById("alerts-summary"),
@@ -122,13 +134,19 @@ function readStoredState() {
   state.token = localStorage.getItem(STORAGE_KEYS.token) || "";
   state.topN = Number(localStorage.getItem(STORAGE_KEYS.topN) || "5") || 5;
   state.selectedPortfolioId = localStorage.getItem(STORAGE_KEYS.portfolioId) || "";
+  state.exportLimit = Number(localStorage.getItem(STORAGE_KEYS.exportLimit) || "100") || 100;
+  state.retentionDays = Number(localStorage.getItem(STORAGE_KEYS.retentionDays) || "30") || 30;
   elements.tokenInput.value = state.token;
   elements.topNInput.value = String(state.topN);
+  elements.auditExportLimitInput.value = String(state.exportLimit);
+  elements.retentionDaysInput.value = String(state.retentionDays);
 }
 
 function persistState() {
   localStorage.setItem(STORAGE_KEYS.token, state.token);
   localStorage.setItem(STORAGE_KEYS.topN, String(state.topN));
+  localStorage.setItem(STORAGE_KEYS.exportLimit, String(state.exportLimit));
+  localStorage.setItem(STORAGE_KEYS.retentionDays, String(state.retentionDays));
   if (state.selectedPortfolioId) {
     localStorage.setItem(STORAGE_KEYS.portfolioId, state.selectedPortfolioId);
   } else {
@@ -136,12 +154,15 @@ function persistState() {
   }
 }
 
-async function apiGet(path) {
+async function apiRequest(method, path, payload) {
   const response = await fetch(path, {
+    method: method,
     headers: {
       Accept: "application/json",
       Authorization: "Bearer " + state.token,
+      "Content-Type": "application/json",
     },
+    body: payload ? JSON.stringify(payload) : undefined,
   });
   const payload = await response.json().catch(function () {
     return {};
@@ -150,6 +171,10 @@ async function apiGet(path) {
     throw new Error(payload.error || "request_failed");
   }
   return payload;
+}
+
+async function apiGet(path) {
+  return apiRequest("GET", path);
 }
 
 function renderHero(topology, alertSummary, auditSummary, executive) {
@@ -390,6 +415,8 @@ function renderPortfolioDashboard(dashboard) {
 }
 
 function clearDashboardViews() {
+  elements.actionSummary.innerHTML = "";
+  elements.actionDetail.innerHTML = emptyState("Run an operator action to inspect export samples or retention impact.");
   elements.topologySummary.innerHTML = "";
   elements.topologyGrid.innerHTML = emptyState("Topology will appear after authentication.");
   elements.alertsSummary.innerHTML = "";
@@ -402,6 +429,74 @@ function clearDashboardViews() {
   elements.portfolioDetail.innerHTML = emptyState("Portfolio drilldown will appear after authentication.");
 }
 
+function actionLabel(actionName) {
+  return {
+    audit_export: "Audit export",
+    audit_retention_dry_run: "Retention preview",
+    audit_retention_apply: "Retention purge",
+  }[actionName] || actionName;
+}
+
+function renderActionResult(actionName, result) {
+  if (!result) {
+    elements.actionSummary.innerHTML = "";
+    elements.actionDetail.innerHTML = emptyState("Run an operator action to inspect export samples or retention impact.");
+    return;
+  }
+
+  if (actionName === "audit_export") {
+    const previewEvents = (result.events || []).slice(0, 3).map(function (event) {
+      return {
+        created_at: event.created_at,
+        service_name: event.service_name,
+        action: event.action,
+        outcome: event.outcome,
+        resource: event.resource,
+      };
+    });
+    elements.actionSummary.innerHTML = [
+      metricPill("Action", actionLabel(actionName), "neutral"),
+      metricPill("Exported events", result.count || 0, "healthy"),
+      metricPill("Summary events", result.summary ? result.summary.total_events || 0 : 0, "neutral"),
+    ].join("");
+    elements.actionDetail.innerHTML = [
+      '<article class="result-block"><strong>Export generated</strong><div class="list-muted">Exported at ',
+      escapeHtml(formatTimestamp(result.exported_at)),
+      ' with ',
+      escapeHtml(String(result.count || 0)),
+      ' events.</div><pre class="result-code">',
+      escapeHtml(JSON.stringify(previewEvents, null, 2)),
+      "</pre></article>",
+    ].join("");
+    return;
+  }
+
+  const deletedCount = result.deleted_count || 0;
+  const wouldDelete = result.would_delete || 0;
+  elements.actionSummary.innerHTML = [
+    metricPill("Action", actionLabel(actionName), actionName === "audit_retention_apply" ? "critical" : "risk"),
+    metricPill("Retention days", result.retention_days || state.retentionDays, "neutral"),
+    metricPill(
+      actionName === "audit_retention_apply" ? "Deleted" : "Would delete",
+      actionName === "audit_retention_apply" ? deletedCount : wouldDelete,
+      actionName === "audit_retention_apply" ? "critical" : "risk"
+    ),
+  ].join("");
+  elements.actionDetail.innerHTML = [
+    '<article class="result-block"><strong>',
+    escapeHtml(actionLabel(actionName)),
+    '</strong><div class="list-muted">Cutoff ',
+    escapeHtml(result.cutoff || "n/a"),
+    " / dry run ",
+    escapeHtml(String(Boolean(result.dry_run))),
+    '</div><div class="micro-list">',
+    "<span>retention_days: " + escapeHtml(String(result.retention_days || state.retentionDays)) + "</span>",
+    "<span>would_delete: " + escapeHtml(String(wouldDelete)) + "</span>",
+    "<span>deleted_count: " + escapeHtml(String(deletedCount)) + "</span>",
+    "</div></article>",
+  ].join("");
+}
+
 async function fetchControlRoom(selectedPortfolioId) {
   const query = new URLSearchParams();
   query.set("top_n", String(state.topN));
@@ -409,6 +504,42 @@ async function fetchControlRoom(selectedPortfolioId) {
     query.set("portfolio_id", selectedPortfolioId);
   }
   return apiGet(ENDPOINTS.controlRoom + "?" + query.toString());
+}
+
+async function runControlRoomAction(actionName) {
+  state.token = elements.tokenInput.value.trim();
+  state.topN = Math.max(1, Math.min(20, Number(elements.topNInput.value) || 5));
+  state.exportLimit = Math.max(1, Math.min(1000, Number(elements.auditExportLimitInput.value) || 100));
+  state.retentionDays = Math.max(0, Math.min(3650, Number(elements.retentionDaysInput.value) || 30));
+  elements.topNInput.value = String(state.topN);
+  elements.auditExportLimitInput.value = String(state.exportLimit);
+  elements.retentionDaysInput.value = String(state.retentionDays);
+  persistState();
+
+  if (!state.token) {
+    setStatus("Bearer token required before running operator actions.", "error");
+    renderActionResult("", null);
+    return;
+  }
+
+  const payload = {
+    action: actionName,
+    top_n: state.topN,
+  };
+  if (state.selectedPortfolioId) {
+    payload.portfolio_id = state.selectedPortfolioId;
+  }
+  if (actionName === "audit_export") {
+    payload.limit = state.exportLimit;
+  } else {
+    payload.retention_days = state.retentionDays;
+  }
+
+  setStatus("Running " + actionLabel(actionName).toLowerCase() + ".", "loading");
+  const response = await apiRequest("POST", ENDPOINTS.controlRoomActions, payload);
+  renderActionResult(response.action, response.result);
+  renderControlRoom(response.control_room);
+  setStatus(actionLabel(actionName) + " completed.", "success");
 }
 
 function renderControlRoom(controlRoom) {
@@ -436,7 +567,11 @@ function renderControlRoom(controlRoom) {
 async function refreshControlRoom() {
   state.token = elements.tokenInput.value.trim();
   state.topN = Math.max(1, Math.min(20, Number(elements.topNInput.value) || 5));
+  state.exportLimit = Math.max(1, Math.min(1000, Number(elements.auditExportLimitInput.value) || 100));
+  state.retentionDays = Math.max(0, Math.min(3650, Number(elements.retentionDaysInput.value) || 30));
   elements.topNInput.value = String(state.topN);
+  elements.auditExportLimitInput.value = String(state.exportLimit);
+  elements.retentionDaysInput.value = String(state.retentionDays);
   persistState();
 
   if (!state.token) {
@@ -485,14 +620,38 @@ elements.clearSession.addEventListener("click", function () {
   state.token = "";
   state.topN = 5;
   state.selectedPortfolioId = "";
+  state.exportLimit = 100;
+  state.retentionDays = 30;
   state.executive = null;
   localStorage.removeItem(STORAGE_KEYS.token);
   localStorage.removeItem(STORAGE_KEYS.topN);
   localStorage.removeItem(STORAGE_KEYS.portfolioId);
+  localStorage.removeItem(STORAGE_KEYS.exportLimit);
+  localStorage.removeItem(STORAGE_KEYS.retentionDays);
   elements.tokenInput.value = "";
   elements.topNInput.value = "5";
+  elements.auditExportLimitInput.value = "100";
+  elements.retentionDaysInput.value = "30";
   elements.portfolioSelect.value = "";
   refreshControlRoom();
+});
+
+elements.runAuditExport.addEventListener("click", function () {
+  runControlRoomAction("audit_export").catch(function (error) {
+    setStatus("Audit export failed: " + error.message, "error");
+  });
+});
+
+elements.previewRetention.addEventListener("click", function () {
+  runControlRoomAction("audit_retention_dry_run").catch(function (error) {
+    setStatus("Retention preview failed: " + error.message, "error");
+  });
+});
+
+elements.applyRetention.addEventListener("click", function () {
+  runControlRoomAction("audit_retention_apply").catch(function (error) {
+    setStatus("Retention purge failed: " + error.message, "error");
+  });
 });
 
 elements.portfolioSelect.addEventListener("change", function () {

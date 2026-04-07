@@ -23,6 +23,12 @@ class OpsReportCliTest(unittest.TestCase):
         self.assertEqual(parsed["report_name"], "topology")
         self.assertEqual(parsed["retention_days"], 30)
 
+    def test_control_room_report_name_is_accepted(self) -> None:
+        parsed = parse_cli_args(["control-room", "cli-token"], None, "30")
+        self.assertEqual(parsed["token"], "cli-token")
+        self.assertEqual(parsed["report_name"], "control-room")
+        self.assertEqual(parsed["retention_days"], 30)
+
     def test_retention_command_accepts_days_without_overriding_env_token(self) -> None:
         parsed = parse_cli_args(["audit-retention-dry-run", "14"], "env-token", "30")
         self.assertEqual(parsed["token"], "env-token")
