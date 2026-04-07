@@ -40,6 +40,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 
 - Stores open and acknowledged alerts
 - Provides a simple alert inbox for operational governance
+- Deduplicates repeated open alerts and escalates persistent warning patterns
 
 ### Audit Service
 
@@ -83,6 +84,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - Analytics aggregates project summaries in parallel for larger portfolios.
 - Gateway topology reporting makes dependency regressions visible without opening every service separately.
 - Audit event ingestion keeps compliance-relevant mutation history queryable per tenant.
+- Repeated operational alerts are folded into a single open alert with occurrence tracking and escalation.
 
 ## Tradeoffs
 

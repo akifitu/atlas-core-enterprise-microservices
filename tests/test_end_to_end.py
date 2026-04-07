@@ -196,9 +196,11 @@ class AtlasCoreE2ETest(unittest.TestCase):
         )
 
         alerts = self.gateway_request("GET", "/api/v1/notifications/alerts?status=open", token=token)["alerts"]
-        self.assertGreaterEqual(len(alerts), 3)
+        self.assertEqual(len(alerts), 2)
         self.assertTrue(any(alert["source"] == "delivery-service" for alert in alerts))
-        self.assertTrue(any(alert["source"] == "finance-service" for alert in alerts))
+        finance_alert = next(alert for alert in alerts if alert["source"] == "finance-service")
+        self.assertEqual(finance_alert["severity"], "critical")
+        self.assertEqual(finance_alert["occurrence_count"], 2)
 
         dashboard = self.gateway_request(
             "GET",
@@ -376,6 +378,57 @@ class AtlasCoreE2ETest(unittest.TestCase):
         )
         self.assertEqual(status_code, 409)
         self.assertEqual(payload["error"], "idempotency_key_conflict")
+
+    def test_repeated_operational_alerts_are_escalated_in_place(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Alert Tenant")
+        token = bootstrap["token"]
+
+        portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Escalation Portfolio"},
+            token=token,
+        )["portfolio"]
+        project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(portfolio["id"]),
+            {
+                "name": "Escalation Program",
+                "code": "ESCALATION-PROGRAM",
+                "status": "active",
+                "start_date": "2026-06-01",
+                "target_date": "2026-11-01",
+            },
+            token=token,
+        )["project"]
+        work_item = self.gateway_request(
+            "POST",
+            "/api/v1/delivery/projects/{0}/work-items".format(project["id"]),
+            {
+                "title": "Vendor readiness gate",
+                "priority": "high",
+                "assignee": "PMO",
+            },
+            token=token,
+        )["work_item"]
+
+        for reason in ("Missing scope approval", "Missing scope approval", "Missing scope approval"):
+            self.gateway_request(
+                "PATCH",
+                "/api/v1/delivery/work-items/{0}/status".format(work_item["id"]),
+                {"status": "blocked", "blocked_reason": reason},
+                token=token,
+            )
+
+        alerts = self.gateway_request(
+            "GET",
+            "/api/v1/notifications/alerts?project_id={0}&status=open".format(project["id"]),
+            token=token,
+        )["alerts"]
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["severity"], "critical")
+        self.assertEqual(alerts[0]["occurrence_count"], 3)
+        self.assertIsNotNone(alerts[0]["escalated_at"])
 
     def test_executive_summary_aggregates_across_portfolios(self) -> None:
         bootstrap = self.bootstrap_admin_session("Atlas Executive Tenant")

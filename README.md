@@ -12,7 +12,7 @@ The fictional product solves a common enterprise pain point: leadership can fund
 - Portfolio and project governance
 - Delivery execution and blockers
 - Budget planning and expense tracking
-- Alerting for blocked work and budget thresholds
+- Alerting for blocked work and budget thresholds with deduplication and escalation
 - Tenant-scoped audit trails for state-changing operations
 - Executive dashboards aggregated across services
 
@@ -37,6 +37,7 @@ The fictional product solves a common enterprise pain point: leadership can fund
 - Central audit trail for every authenticated state-changing request
 - SQLite-backed independent persistence per service
 - Synchronous service-to-service calls for analytics and alert creation
+- Notification deduplication to reduce duplicate open-alert noise
 - Request tracing via `X-Request-ID`
 - Clear internal and external API separation
 - Executable end-to-end test that boots the full stack

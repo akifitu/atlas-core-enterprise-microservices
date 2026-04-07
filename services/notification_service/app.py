@@ -14,6 +14,7 @@ DATABASE_PATH = env("NOTIFICATION_DB_PATH", "runtime/notification-service.db")
 
 db = Database(DATABASE_PATH or "runtime/notification-service.db")
 app = ServiceApp(SERVICE_NAME)
+SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 
 
 def migrate() -> None:
@@ -29,6 +30,10 @@ def migrate() -> None:
             source TEXT NOT NULL,
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            first_seen_at TEXT,
+            last_seen_at TEXT,
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
+            escalated_at TEXT,
             acknowledged_at TEXT,
             acknowledged_by TEXT
         );
@@ -38,8 +43,21 @@ def migrate() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_alerts_tenant_project_status_created_at
         ON alerts (tenant_id, project_id, status, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_alerts_tenant_project_source_status
+        ON alerts (tenant_id, project_id, source, status);
         """
     )
+
+    existing_columns = {column["name"] for column in db.fetchall("PRAGMA table_info(alerts)")}
+    if "first_seen_at" not in existing_columns:
+        db.execute("ALTER TABLE alerts ADD COLUMN first_seen_at TEXT")
+    if "last_seen_at" not in existing_columns:
+        db.execute("ALTER TABLE alerts ADD COLUMN last_seen_at TEXT")
+    if "occurrence_count" not in existing_columns:
+        db.execute("ALTER TABLE alerts ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1")
+    if "escalated_at" not in existing_columns:
+        db.execute("ALTER TABLE alerts ADD COLUMN escalated_at TEXT")
 
 
 def require_json_object(request: Request) -> Dict[str, Any]:
@@ -73,6 +91,25 @@ def tenant_from_request(request: Request, payload: Optional[Dict[str, Any]] = No
     raise AppError(400, "tenant_id_required")
 
 
+def effective_severity(existing_severity: str, incoming_severity: str, occurrence_count: int) -> str:
+    highest = existing_severity if SEVERITY_ORDER[existing_severity] >= SEVERITY_ORDER[incoming_severity] else incoming_severity
+    if highest != "critical" and occurrence_count >= 3:
+        return "critical"
+    return highest
+
+
+def find_open_alert(tenant_id: str, project_id: str, source: str, title: str) -> Optional[Dict[str, Any]]:
+    return db.fetchone(
+        """
+        SELECT * FROM alerts
+        WHERE tenant_id = ? AND project_id = ? AND source = ? AND title = ? AND status = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (tenant_id, project_id, source, title, "open"),
+    )
+
+
 @app.route("GET", "/health")
 def health(_: Request):
     return 200, {
@@ -91,22 +128,60 @@ def create_alert(request: Request):
     if severity not in ("info", "warning", "critical"):
         raise AppError(400, "invalid_severity", {"severity": severity})
 
+    title = require_field(payload, "title")
+    message = require_field(payload, "message")
+    source = require_field(payload, "source")
+    existing_alert = find_open_alert(tenant_id, project_id, source, title)
+    now = utc_now()
+
+    if existing_alert:
+        occurrence_count = int(existing_alert.get("occurrence_count") or 1) + 1
+        next_severity = effective_severity(existing_alert["severity"], severity, occurrence_count)
+        escalated_at = existing_alert.get("escalated_at")
+        if next_severity != existing_alert["severity"] and next_severity == "critical" and not escalated_at:
+            escalated_at = now
+
+        db.execute(
+            """
+            UPDATE alerts
+            SET severity = ?, message = ?, last_seen_at = ?, occurrence_count = ?, escalated_at = ?
+            WHERE id = ? AND tenant_id = ?
+            """,
+            (
+                next_severity,
+                message,
+                now,
+                occurrence_count,
+                escalated_at,
+                existing_alert["id"],
+                tenant_id,
+            ),
+        )
+        return 200, {"alert": alert_by_id(tenant_id, existing_alert["id"])}
+
     alert_id = str(uuid.uuid4())
     db.execute(
         """
-        INSERT INTO alerts (id, tenant_id, project_id, severity, title, message, source, status, created_at, acknowledged_at, acknowledged_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO alerts (
+            id, tenant_id, project_id, severity, title, message, source, status, created_at,
+            first_seen_at, last_seen_at, occurrence_count, escalated_at, acknowledged_at, acknowledged_by
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             alert_id,
             tenant_id,
             project_id,
             severity,
-            require_field(payload, "title"),
-            require_field(payload, "message"),
-            require_field(payload, "source"),
+            title,
+            message,
+            source,
             "open",
-            utc_now(),
+            now,
+            now,
+            now,
+            1,
+            None,
             None,
             None,
         ),
