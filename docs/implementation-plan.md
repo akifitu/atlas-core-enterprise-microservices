@@ -62,6 +62,8 @@ Atlas Core was selected as a multi-tenant enterprise PPM platform using Python s
 - Tenant audit trail service and audit event query surface
 - Tenant-wide executive summary analytics endpoint
 - Alert deduplication and escalation behavior for operational signal quality
+- Audit summary/export/retention governance endpoints
+- Alert summary reporting for operations
 - Alerting and analytics
 - Local runner
 - Demo script

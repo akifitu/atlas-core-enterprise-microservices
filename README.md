@@ -38,6 +38,7 @@ The fictional product solves a common enterprise pain point: leadership can fund
 - SQLite-backed independent persistence per service
 - Synchronous service-to-service calls for analytics and alert creation
 - Notification deduplication to reduce duplicate open-alert noise
+- Audit governance controls for summary, export, and retention operations
 - Request tracing via `X-Request-ID`
 - Clear internal and external API separation
 - Executable end-to-end test that boots the full stack
@@ -106,6 +107,14 @@ curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
   -H "Authorization: Bearer <token>"
 ```
 
+### 6. Generate ops overview
+
+```bash
+ATLAS_TOKEN=<token> python3 scripts/ops_report.py overview
+```
+
+This combines platform topology, alert summary, and audit summary in one operator-facing report.
+
 ## Main Flows
 
 ### Tenant and Auth
@@ -139,7 +148,11 @@ The analytics service composes project, delivery, finance, and alert data into b
 
 1. `GET /api/v1/platform/topology`
 2. `GET /api/v1/platform/audit-events`
-3. Inspect per-service health, latency, auth cache, and tenant audit history
+3. `GET /api/v1/platform/audit-summary`
+4. `GET /api/v1/platform/audit-export`
+5. `POST /api/v1/platform/audit-retention`
+6. `GET /api/v1/platform/alert-summary`
+7. Inspect per-service health, latency, auth cache, tenant audit history, and alert pressure
 
 ## Why This Works As A Portfolio Project
 

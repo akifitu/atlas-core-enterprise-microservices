@@ -4,6 +4,7 @@
 
 ```bash
 curl -s http://127.0.0.1:7000/api/v1/identity/bootstrap-admin \
+  -H "X-Bootstrap-Token: $IDENTITY_BOOTSTRAP_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "tenant_name": "Atlas Global Holdings",
@@ -110,5 +111,30 @@ curl -s http://127.0.0.1:7000/api/v1/platform/topology \
 
 ```bash
 curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
+  -H "Authorization: Bearer $ATLAS_TOKEN"
+```
+
+```bash
+curl -s http://127.0.0.1:7000/api/v1/platform/audit-summary \
+  -H "Authorization: Bearer $ATLAS_TOKEN"
+```
+
+```bash
+curl -s "http://127.0.0.1:7000/api/v1/platform/audit-export?limit=100" \
+  -H "Authorization: Bearer $ATLAS_TOKEN"
+```
+
+```bash
+curl -s http://127.0.0.1:7000/api/v1/platform/audit-retention \
+  -H "Authorization: Bearer $ATLAS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "retention_days": 30,
+    "dry_run": true
+  }'
+```
+
+```bash
+curl -s http://127.0.0.1:7000/api/v1/platform/alert-summary \
   -H "Authorization: Bearer $ATLAS_TOKEN"
 ```

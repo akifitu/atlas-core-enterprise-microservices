@@ -41,12 +41,14 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - Stores open and acknowledged alerts
 - Provides a simple alert inbox for operational governance
 - Deduplicates repeated open alerts and escalates persistent warning patterns
+- Produces alert summary rollups for operator dashboards and noisy-project detection
 
 ### Audit Service
 
 - Receives tenant-scoped audit events for authenticated write operations
 - Stores actor, request, resource, outcome, and entity references
 - Exposes searchable audit history for admin and portfolio operators
+- Exposes summary/export views and retention purge controls for governance workflows
 
 ### Analytics Service
 
