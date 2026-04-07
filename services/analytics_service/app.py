@@ -81,6 +81,123 @@ def build_project_summary(project: Dict[str, Any], headers: Dict[str, str], aler
     }
 
 
+def build_project_summaries(
+    projects: List[Dict[str, Any]],
+    headers: Dict[str, str],
+    alerts_by_project: Dict[str, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(projects) or 1))) as executor:
+        summaries = list(
+            executor.map(
+                lambda project: build_project_summary(project, headers, alerts_by_project),
+                projects,
+            )
+        )
+    summaries.sort(key=lambda item: (HEALTH_ORDER.get(item["health"], 99), item["project"]["name"]))
+    return summaries
+
+
+def aggregate_totals(projects_summary: List[Dict[str, Any]], open_alert_count: int) -> Dict[str, Any]:
+    total_budget = round(sum(item["finance"]["budget_total"] for item in projects_summary), 2)
+    total_spent = round(sum(item["finance"]["spent"] for item in projects_summary), 2)
+    total_work_items = sum(item["delivery"]["count"] for item in projects_summary)
+    total_blocked = sum(item["delivery"]["blocked"] for item in projects_summary)
+    total_done = sum(item["delivery"]["done"] for item in projects_summary)
+    completion_rate = round((total_done / total_work_items) * 100, 2) if total_work_items else 0.0
+    budget_utilization = round((total_spent / total_budget) * 100, 2) if total_budget else 0.0
+    health_distribution = {
+        "critical": len([item for item in projects_summary if item["health"] == "critical"]),
+        "at_risk": len([item for item in projects_summary if item["health"] == "at_risk"]),
+        "healthy": len([item for item in projects_summary if item["health"] == "healthy"]),
+        "not_started": len([item for item in projects_summary if item["health"] == "not_started"]),
+    }
+    return {
+        "projects": len(projects_summary),
+        "work_items": total_work_items,
+        "blocked_work_items": total_blocked,
+        "completion_rate": completion_rate,
+        "budget_total": total_budget,
+        "spent": total_spent,
+        "budget_utilization_pct": budget_utilization,
+        "open_alerts": open_alert_count,
+        "health_distribution": health_distribution,
+    }
+
+
+def fetch_open_alerts(headers: Dict[str, str]) -> List[Dict[str, Any]]:
+    alert_payload = require_success(
+        *request_json(
+            "GET",
+            NOTIFICATION_SERVICE_URL,
+            "/alerts?" + urlencode({"status": "open"}),
+            headers=headers,
+        ),
+        dependency_name="notification-service",
+    )
+    return alert_payload["alerts"]
+
+
+def map_alerts_by_project(open_alerts: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    alerts_by_project: Dict[str, List[Dict[str, Any]]] = {}
+    for alert in open_alerts:
+        alerts_by_project.setdefault(alert["project_id"], []).append(alert)
+    return alerts_by_project
+
+
+def build_portfolio_summary(
+    portfolio_snapshot: Dict[str, Any],
+    headers: Dict[str, str],
+    alerts_by_project: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    project_summaries = build_project_summaries(portfolio_snapshot["projects"], headers, alerts_by_project)
+    portfolio_alert_count = sum(len(item["open_alerts"]) for item in project_summaries)
+    return {
+        "portfolio": portfolio_snapshot["portfolio"],
+        "projects": project_summaries,
+        "totals": aggregate_totals(project_summaries, portfolio_alert_count),
+    }
+
+
+def fetch_portfolio_snapshot(portfolio_id: str, headers: Dict[str, str]) -> Dict[str, Any]:
+    return require_success(
+        *request_json(
+            "GET",
+            PORTFOLIO_SERVICE_URL,
+            "/portfolios/{0}/snapshot".format(portfolio_id),
+            headers=headers,
+        ),
+        dependency_name="portfolio-service",
+    )
+
+
+def executive_risk_view(portfolio_summaries: List[Dict[str, Any]], top_n: int) -> List[Dict[str, Any]]:
+    risk_items = []
+    for portfolio_summary in portfolio_summaries:
+        portfolio = portfolio_summary["portfolio"]
+        for project_summary in portfolio_summary["projects"]:
+            risk_items.append(
+                {
+                    "portfolio_id": portfolio["id"],
+                    "portfolio_name": portfolio["name"],
+                    "project": project_summary["project"],
+                    "health": project_summary["health"],
+                    "blocked_work_items": project_summary["delivery"]["blocked"],
+                    "budget_utilization_pct": project_summary["finance"]["utilization_pct"],
+                    "open_alerts": len(project_summary["open_alerts"]),
+                }
+            )
+    risk_items.sort(
+        key=lambda item: (
+            HEALTH_ORDER.get(item["health"], 99),
+            -item["open_alerts"],
+            -item["blocked_work_items"],
+            -item["budget_utilization_pct"],
+            item["project"]["name"],
+        )
+    )
+    return risk_items[:top_n]
+
+
 @app.route("GET", "/health")
 def health(_: Request):
     return 200, {"status": "ok", "service": SERVICE_NAME}
@@ -94,69 +211,67 @@ def dashboard(request: Request):
         raise AppError(400, "portfolio_id_query_parameter_required")
 
     headers = internal_headers(actor, request.request_id)
-    portfolio_payload = require_success(
-        *request_json(
-            "GET",
-            PORTFOLIO_SERVICE_URL,
-            "/portfolios/{0}/snapshot".format(portfolio_id),
-            headers=headers,
-        ),
-        dependency_name="portfolio-service",
-    )
-    alert_payload = require_success(
-        *request_json(
-            "GET",
-            NOTIFICATION_SERVICE_URL,
-            "/alerts?" + urlencode({"status": "open"}),
-            headers=headers,
-        ),
-        dependency_name="notification-service",
-    )
-
-    open_alerts = alert_payload["alerts"]
-    alerts_by_project: Dict[str, List[Dict[str, Any]]] = {}
-    for alert in open_alerts:
-        alerts_by_project.setdefault(alert["project_id"], []).append(alert)
-
-    with ThreadPoolExecutor(max_workers=max(1, min(8, len(portfolio_payload["projects"]) or 1))) as executor:
-        projects_summary = list(
-            executor.map(
-                lambda project: build_project_summary(project, headers, alerts_by_project),
-                portfolio_payload["projects"],
-            )
-        )
-
-    projects_summary.sort(key=lambda item: (HEALTH_ORDER.get(item["health"], 99), item["project"]["name"]))
-    total_budget = round(sum(item["finance"]["budget_total"] for item in projects_summary), 2)
-    total_spent = round(sum(item["finance"]["spent"] for item in projects_summary), 2)
-    total_work_items = sum(item["delivery"]["count"] for item in projects_summary)
-    total_blocked = sum(item["delivery"]["blocked"] for item in projects_summary)
-    total_done = sum(item["delivery"]["done"] for item in projects_summary)
-    health_distribution = {
-        "critical": len([item for item in projects_summary if item["health"] == "critical"]),
-        "at_risk": len([item for item in projects_summary if item["health"] == "at_risk"]),
-        "healthy": len([item for item in projects_summary if item["health"] == "healthy"]),
-        "not_started": len([item for item in projects_summary if item["health"] == "not_started"]),
-    }
-
-    completion_rate = round((total_done / total_work_items) * 100, 2) if total_work_items else 0.0
-    budget_utilization = round((total_spent / total_budget) * 100, 2) if total_budget else 0.0
+    portfolio_payload = fetch_portfolio_snapshot(portfolio_id, headers)
+    open_alerts = fetch_open_alerts(headers)
+    alerts_by_project = map_alerts_by_project(open_alerts)
+    projects_summary = build_project_summaries(portfolio_payload["projects"], headers, alerts_by_project)
+    totals = aggregate_totals(projects_summary, len(open_alerts))
 
     return 200, {
         "portfolio": portfolio_payload["portfolio"],
         "generated_at": utc_now(),
-        "totals": {
-            "projects": len(projects_summary),
-            "work_items": total_work_items,
-            "blocked_work_items": total_blocked,
-            "completion_rate": completion_rate,
-            "budget_total": round(total_budget, 2),
-            "spent": round(total_spent, 2),
-            "budget_utilization_pct": budget_utilization,
-            "open_alerts": len(open_alerts),
-            "health_distribution": health_distribution,
-        },
+        "totals": totals,
         "projects": projects_summary,
+    }
+
+
+@app.route("GET", "/executive-summary")
+def executive_summary(request: Request):
+    actor = require_actor(request)
+    try:
+        top_n = max(1, min(20, int(request.query_value("top_n", "5") or "5")))
+    except ValueError as exc:
+        raise AppError(400, "invalid_top_n") from exc
+
+    headers = internal_headers(actor, request.request_id)
+    portfolio_list_payload = require_success(
+        *request_json(
+            "GET",
+            PORTFOLIO_SERVICE_URL,
+            "/portfolios",
+            headers=headers,
+        ),
+        dependency_name="portfolio-service",
+    )
+    open_alerts = fetch_open_alerts(headers)
+    alerts_by_project = map_alerts_by_project(open_alerts)
+
+    portfolios = portfolio_list_payload["portfolios"]
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(portfolios) or 1))) as executor:
+        portfolio_snapshots = list(
+            executor.map(lambda portfolio: fetch_portfolio_snapshot(portfolio["id"], headers), portfolios)
+        )
+
+    portfolio_summaries = [
+        build_portfolio_summary(portfolio_snapshot, headers, alerts_by_project)
+        for portfolio_snapshot in portfolio_snapshots
+    ]
+    portfolio_summaries.sort(key=lambda item: item["portfolio"]["name"])
+
+    all_project_summaries = [
+        project_summary
+        for portfolio_summary in portfolio_summaries
+        for project_summary in portfolio_summary["projects"]
+    ]
+    totals = aggregate_totals(all_project_summaries, len(open_alerts))
+    totals["portfolios"] = len(portfolio_summaries)
+    top_risks = executive_risk_view(portfolio_summaries, top_n)
+
+    return 200, {
+        "generated_at": utc_now(),
+        "totals": totals,
+        "portfolios": portfolio_summaries,
+        "top_risks": top_risks,
     }
 
 

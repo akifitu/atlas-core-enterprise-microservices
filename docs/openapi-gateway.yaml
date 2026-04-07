@@ -376,6 +376,21 @@ paths:
       responses:
         "200":
           description: Dashboard payload
+  /api/v1/analytics/executive-summary:
+    get:
+      tags: [Analytics]
+      summary: Build tenant-wide executive summary across all portfolios
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: top_n
+          schema:
+            type: integer
+            default: 5
+      responses:
+        "200":
+          description: Executive summary payload
   /api/v1/platform/topology:
     get:
       tags: [Platform]

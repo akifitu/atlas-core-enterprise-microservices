@@ -122,8 +122,9 @@ curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
 ### Executive Analytics
 
 1. `GET /api/v1/analytics/dashboard?portfolio_id=<id>`
+2. `GET /api/v1/analytics/executive-summary?top_n=<n>`
 
-The analytics service composes project, delivery, finance, and alert data into a single executive view with project health.
+The analytics service composes project, delivery, finance, and alert data into both a portfolio dashboard and a tenant-wide executive summary with ranked risks.
 
 ### Platform Operations
 

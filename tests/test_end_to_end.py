@@ -372,6 +372,119 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(status_code, 409)
         self.assertEqual(payload["error"], "idempotency_key_conflict")
 
+    def test_executive_summary_aggregates_across_portfolios(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Executive Tenant")
+        token = bootstrap["token"]
+
+        risk_portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Risk Portfolio"},
+            token=token,
+        )["portfolio"]
+        healthy_portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Healthy Portfolio"},
+            token=token,
+        )["portfolio"]
+
+        risk_project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(risk_portfolio["id"]),
+            {
+                "name": "Risk Program",
+                "code": "RISK-PROGRAM",
+                "status": "active",
+                "start_date": "2026-05-01",
+                "target_date": "2026-12-01",
+            },
+            token=token,
+        )["project"]
+        healthy_project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(healthy_portfolio["id"]),
+            {
+                "name": "Healthy Program",
+                "code": "HEALTHY-PROGRAM",
+                "status": "active",
+                "start_date": "2026-05-01",
+                "target_date": "2026-10-01",
+            },
+            token=token,
+        )["project"]
+
+        blocked_item = self.gateway_request(
+            "POST",
+            "/api/v1/delivery/projects/{0}/work-items".format(risk_project["id"]),
+            {
+                "title": "Identity integration",
+                "priority": "critical",
+                "assignee": "Platform Team",
+            },
+            token=token,
+        )["work_item"]
+        self.gateway_request(
+            "PATCH",
+            "/api/v1/delivery/work-items/{0}/status".format(blocked_item["id"]),
+            {"status": "blocked", "blocked_reason": "SSO contract still pending"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(risk_project["id"]),
+            {"total_budget": 100000, "currency": "USD"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/expenses".format(risk_project["id"]),
+            {"amount": 110000, "category": "vendor_change_request"},
+            token=token,
+        )
+
+        healthy_item = self.gateway_request(
+            "POST",
+            "/api/v1/delivery/projects/{0}/work-items".format(healthy_project["id"]),
+            {
+                "title": "Regional rollout",
+                "priority": "medium",
+                "assignee": "Delivery Team",
+            },
+            token=token,
+        )["work_item"]
+        self.gateway_request(
+            "PATCH",
+            "/api/v1/delivery/work-items/{0}/status".format(healthy_item["id"]),
+            {"status": "done"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(healthy_project["id"]),
+            {"total_budget": 50000, "currency": "USD"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/expenses".format(healthy_project["id"]),
+            {"amount": 5000, "category": "rollout_support"},
+            token=token,
+        )
+
+        summary = self.gateway_request(
+            "GET",
+            "/api/v1/analytics/executive-summary?top_n=1",
+            token=token,
+        )
+
+        self.assertEqual(summary["totals"]["portfolios"], 2)
+        self.assertEqual(summary["totals"]["projects"], 2)
+        self.assertEqual(summary["totals"]["health_distribution"]["critical"], 1)
+        self.assertEqual(summary["top_risks"][0]["project"]["id"], risk_project["id"])
+        self.assertEqual(len(summary["portfolios"]), 2)
+        self.assertTrue(any(item["portfolio"]["id"] == healthy_portfolio["id"] for item in summary["portfolios"]))
+
 
 if __name__ == "__main__":
     unittest.main()

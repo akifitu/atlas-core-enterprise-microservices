@@ -51,6 +51,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 
 - Aggregates data from portfolio, delivery, finance, and notification services
 - Produces an executive dashboard with derived project health
+- Produces tenant-wide executive summaries with ranked portfolio risk views
 
 ## Request Flow
 

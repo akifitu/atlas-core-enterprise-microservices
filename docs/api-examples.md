@@ -94,6 +94,13 @@ curl -s "http://127.0.0.1:7000/api/v1/analytics/dashboard?portfolio_id=$PORTFOLI
   -H "Authorization: Bearer $ATLAS_TOKEN"
 ```
 
+## Read The Tenant Executive Summary
+
+```bash
+curl -s "http://127.0.0.1:7000/api/v1/analytics/executive-summary?top_n=5" \
+  -H "Authorization: Bearer $ATLAS_TOKEN"
+```
+
 ## Read Platform Health And Audit Trail
 
 ```bash

@@ -154,6 +154,11 @@ def main() -> int:
         "/api/v1/analytics/dashboard?portfolio_id={0}".format(portfolio["id"]),
         token=token,
     )
+    executive_summary = gateway_request(
+        "GET",
+        "/api/v1/analytics/executive-summary?top_n=3",
+        token=token,
+    )
 
     print(
         json.dumps(
@@ -166,6 +171,7 @@ def main() -> int:
                 "open_alerts": alerts,
                 "audit_events": audit_events,
                 "dashboard": dashboard,
+                "executive_summary": executive_summary,
             },
             indent=2,
         )

@@ -554,5 +554,10 @@ def dashboard(request: Request):
     return proxy_request(request, ANALYTICS_SERVICE_URL, "/dashboard")
 
 
+@app.route("GET", "/api/v1/analytics/executive-summary")
+def executive_summary(request: Request):
+    return proxy_request(request, ANALYTICS_SERVICE_URL, "/executive-summary")
+
+
 if __name__ == "__main__":
     run_service(app, HOST or "127.0.0.1", PORT or 7000)
