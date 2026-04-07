@@ -64,6 +64,7 @@ Atlas Core was selected as a multi-tenant enterprise PPM platform using Python s
 - Alert deduplication and escalation behavior for operational signal quality
 - Audit summary/export/retention governance endpoints
 - Alert summary reporting for operations
+- Makefile-backed operator automation for summaries, exports, and retention dry runs
 - Alerting and analytics
 - Local runner
 - Demo script

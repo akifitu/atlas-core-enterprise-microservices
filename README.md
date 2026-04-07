@@ -115,6 +115,16 @@ ATLAS_TOKEN=<token> python3 scripts/ops_report.py overview
 
 This combines platform topology, alert summary, and audit summary in one operator-facing report.
 
+Common operator shortcuts:
+
+```bash
+make ops-topology
+make ops-alert-summary
+make ops-audit-summary
+make ops-audit-export
+make ops-audit-retention-dry-run RETENTION_DAYS=30
+```
+
 ## Main Flows
 
 ### Tenant and Auth

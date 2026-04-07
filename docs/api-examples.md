@@ -138,3 +138,13 @@ curl -s http://127.0.0.1:7000/api/v1/platform/audit-retention \
 curl -s http://127.0.0.1:7000/api/v1/platform/alert-summary \
   -H "Authorization: Bearer $ATLAS_TOKEN"
 ```
+
+## Operator Shortcuts
+
+```bash
+make ops
+make ops-alert-summary
+make ops-audit-summary
+make ops-audit-export
+make ops-audit-retention-dry-run RETENTION_DAYS=30
+```
