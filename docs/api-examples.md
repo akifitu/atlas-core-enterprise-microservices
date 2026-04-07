@@ -169,6 +169,7 @@ That aggregate response already includes:
 - audit summary
 - executive summary
 - selected portfolio dashboard
+- recent operator action history
 
 The UI also runs governance actions through:
 

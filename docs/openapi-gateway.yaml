@@ -425,7 +425,7 @@ paths:
             type: string
       responses:
         "200":
-          description: Aggregated control room payload with topology, summaries, and portfolio drilldown
+          description: Aggregated control room payload with topology, summaries, portfolio drilldown, and recent operator actions
   /api/v1/platform/control-room/actions:
     post:
       tags: [Platform]

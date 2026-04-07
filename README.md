@@ -113,7 +113,7 @@ After bootstrap or `scripts/demo_flow.py`, open:
 http://127.0.0.1:7000/admin
 ```
 
-Paste the bearer token into the control room and it will load an aggregated operator payload from `GET /api/v1/platform/control-room`, including topology, alert summary, audit summary, executive summary, and portfolio drilldown. The same UI now also runs audit export plus retention preview/apply actions through `POST /api/v1/platform/control-room/actions`.
+Paste the bearer token into the control room and it will load an aggregated operator payload from `GET /api/v1/platform/control-room`, including topology, alert summary, audit summary, executive summary, portfolio drilldown, and recent operator action history. The same UI now also runs audit export plus retention preview/apply actions through `POST /api/v1/platform/control-room/actions`.
 
 ### 6. Read audit trail
 
@@ -182,6 +182,8 @@ The analytics service composes project, delivery, finance, and alert data into b
 8. `GET /api/v1/platform/alert-summary`
 9. Inspect per-service health, latency, auth cache, tenant audit history, and alert pressure
 10. Open `/admin` for a gateway-served control room over the same API surface
+
+`control-room` responses now also include `recent_actions` and `recent_actions_summary` so operators can see the latest export and retention runs without opening the raw audit feed.
 
 ## Why This Works As A Portfolio Project
 

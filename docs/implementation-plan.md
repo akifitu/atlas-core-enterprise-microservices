@@ -67,6 +67,7 @@ Atlas Core was selected as a multi-tenant enterprise PPM platform using Python s
 - Makefile-backed operator automation for summaries, exports, and retention dry runs
 - Gateway-served admin control room for topology, governance, and executive visibility
 - Control room operator action surface for audit export and retention workflows
+- Audit-backed recent action history inside the control room aggregate payload
 - Alerting and analytics
 - Local runner
 - Demo script
