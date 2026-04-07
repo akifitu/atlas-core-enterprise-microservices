@@ -116,6 +116,15 @@ class AtlasCoreE2ETest(unittest.TestCase):
             headers.update(extra_headers)
         return request_json(method, self.gateway_url, path, payload, headers)
 
+    def gateway_fetch_raw(self, path: str) -> Tuple[int, str, str, Dict[str, str]]:
+        with request.urlopen(self.gateway_url + path, timeout=5) as response:
+            return (
+                response.status,
+                response.headers.get("Content-Type", ""),
+                response.read().decode("utf-8"),
+                dict(response.headers.items()),
+            )
+
     def bootstrap_admin_session(self, tenant_name_prefix: str = "Atlas Test Tenant") -> Dict:
         suffix = str(uuid.uuid4())[:8]
         status_code, payload = request_json(
@@ -234,6 +243,27 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertIn("audit-service", topology["services"])
         self.assertIn("api-gateway", topology["services"])
         self.assertTrue(all(service["healthy"] for service in topology["services"].values()))
+
+    def test_admin_console_assets_are_served_by_gateway(self) -> None:
+        html_status, html_type, html_body, html_headers = self.gateway_fetch_raw("/admin")
+        self.assertEqual(html_status, 200)
+        self.assertIn("text/html", html_type)
+        self.assertIn("Atlas Core Control Room", html_body)
+        self.assertIn("/admin/styles.css", html_body)
+        self.assertIn("/admin/app.js", html_body)
+        self.assertIn("default-src 'self'", html_headers["Content-Security-Policy"])
+
+        css_status, css_type, css_body, _ = self.gateway_fetch_raw("/admin/styles.css")
+        self.assertEqual(css_status, 200)
+        self.assertIn("text/css", css_type)
+        self.assertIn("--atlas-ink", css_body)
+
+        js_status, js_type, js_body, js_headers = self.gateway_fetch_raw("/admin/app.js")
+        self.assertEqual(js_status, 200)
+        self.assertIn("application/javascript", js_type)
+        self.assertIn("/api/v1/platform/topology", js_body)
+        self.assertIn("/api/v1/analytics/executive-summary", js_body)
+        self.assertEqual(js_headers["X-Frame-Options"], "DENY")
 
     def test_viewer_role_cannot_mutate_portfolio(self) -> None:
         bootstrap = self.bootstrap_admin_session("Atlas Viewer Tenant")

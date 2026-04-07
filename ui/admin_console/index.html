@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Atlas Core Control Room</title>
+  <meta
+    name="description"
+    content="Enterprise operator console for Atlas Core topology, alerts, audit pressure, and portfolio risk."
+  >
+  <link rel="stylesheet" href="/admin/styles.css">
+</head>
+<body>
+  <div class="backdrop"></div>
+  <div class="shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Atlas Core / Control Room</p>
+        <h1>Enterprise posture in a single surface.</h1>
+        <p class="lede">
+          Track service topology, alert noise, audit governance, and portfolio risk without leaving the gateway.
+        </p>
+      </div>
+      <div class="hero-metrics" id="hero-metrics">
+        <article class="metric-card">
+          <span class="metric-label">Gateway</span>
+          <strong class="metric-value">Ready</strong>
+          <span class="metric-detail">Paste a bearer token to load tenant telemetry.</span>
+        </article>
+      </div>
+    </header>
+
+    <section class="controls">
+      <form class="panel control-panel" id="session-form">
+        <div class="panel-heading">
+          <p class="eyebrow">Operator Session</p>
+          <h2>Secure the console</h2>
+        </div>
+        <label class="field">
+          <span>Bearer token</span>
+          <input id="token-input" name="token" type="password" placeholder="Paste admin or portfolio_manager token" autocomplete="off">
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Top risks</span>
+            <input id="top-n-input" name="top_n" type="number" min="1" max="20" value="5">
+          </label>
+          <label class="field">
+            <span>Portfolio drilldown</span>
+            <select id="portfolio-select" name="portfolio_id">
+              <option value="">Auto select highest risk portfolio</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button class="primary" type="submit">Refresh control room</button>
+          <button class="secondary" id="refresh-portfolio" type="button">Refresh selected portfolio</button>
+          <button class="ghost" id="clear-session" type="button">Clear local session</button>
+        </div>
+        <p class="hint">
+          Token and drilldown preference stay only in this browser via local storage for local demo usage.
+        </p>
+      </form>
+
+      <aside class="panel callout">
+        <div class="panel-heading">
+          <p class="eyebrow">Console Scope</p>
+          <h2>Live gateway views</h2>
+        </div>
+        <ul class="callout-list">
+          <li>Platform topology with auth cache and idempotency pressure</li>
+          <li>Alert summary with noisy project ranking and escalated signal count</li>
+          <li>Audit governance summary with actor and service distribution</li>
+          <li>Tenant executive summary plus portfolio-level drilldown</li>
+        </ul>
+        <p class="callout-note">
+          This page uses the same API surface documented in the gateway contract, so the UI stays aligned with the service layer.
+        </p>
+      </aside>
+    </section>
+
+    <section class="status-bar panel" id="status-bar" data-tone="idle">
+      Ready. Enter a token to load live tenant data.
+    </section>
+
+    <main class="dashboard">
+      <section class="panel" aria-labelledby="topology-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Platform</p>
+          <h2 id="topology-title">Topology</h2>
+        </div>
+        <div class="summary-strip" id="topology-summary"></div>
+        <div class="stack-grid" id="topology-grid"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="alerts-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Operations</p>
+          <h2 id="alerts-title">Alert pressure</h2>
+        </div>
+        <div class="summary-strip" id="alerts-summary"></div>
+        <div class="list-block" id="alerts-detail"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="audit-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Governance</p>
+          <h2 id="audit-title">Audit footprint</h2>
+        </div>
+        <div class="summary-strip" id="audit-summary"></div>
+        <div class="list-block" id="audit-detail"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="executive-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Executive</p>
+          <h2 id="executive-title">Tenant summary</h2>
+        </div>
+        <div class="summary-strip" id="executive-summary"></div>
+        <div class="list-block" id="executive-detail"></div>
+      </section>
+
+      <section class="panel wide" aria-labelledby="portfolio-title">
+        <div class="panel-heading">
+          <p class="eyebrow">Portfolio Drilldown</p>
+          <h2 id="portfolio-title">Selected portfolio dashboard</h2>
+        </div>
+        <div class="summary-strip" id="portfolio-summary"></div>
+        <div class="list-block" id="portfolio-detail"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/admin/app.js" defer></script>
+</body>
+</html>

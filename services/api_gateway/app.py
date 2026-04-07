@@ -1,11 +1,12 @@
 import time
+from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
 import json
 from urllib.parse import urlencode
 
 from shared.atlas_core.config import env, service_url, utc_now
-from shared.atlas_core.http import AppError, Request, ServiceApp, run_service
+from shared.atlas_core.http import AppError, HttpResponse, Request, ServiceApp, run_service
 from shared.atlas_core.security import read_bearer_token
 from shared.atlas_core.service_client import request_json
 
@@ -35,6 +36,13 @@ IDEMPOTENCY_STATS = {"hits": 0, "misses": 0, "stored": 0, "conflicts": 0}
 AUTH_CACHE_LOCK = Lock()
 AUDIT_STATS_LOCK = Lock()
 IDEMPOTENCY_LOCK = Lock()
+ROOT_DIR = Path(__file__).resolve().parents[2]
+ADMIN_CONSOLE_DIR = ROOT_DIR / "ui" / "admin_console"
+ADMIN_CONSOLE_ASSETS = {
+    "index.html": "text/html; charset=utf-8",
+    "styles.css": "text/css; charset=utf-8",
+    "app.js": "application/javascript; charset=utf-8",
+}
 
 DEPENDENCIES = {
     "identity-service": IDENTITY_SERVICE_URL,
@@ -45,6 +53,34 @@ DEPENDENCIES = {
     "analytics-service": ANALYTICS_SERVICE_URL,
     "audit-service": AUDIT_SERVICE_URL,
 }
+
+
+def admin_console_asset(asset_name: str) -> Any:
+    content_type = ADMIN_CONSOLE_ASSETS.get(asset_name)
+    if content_type is None:
+        raise AppError(404, "route_not_found", {"path": "/admin/{0}".format(asset_name), "method": "GET"})
+
+    asset_path = ADMIN_CONSOLE_DIR / asset_name
+    return 200, HttpResponse(
+        body=asset_path.read_bytes(),
+        content_type=content_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "connect-src 'self'; "
+                "img-src 'self' data:; "
+                "style-src 'self'; "
+                "script-src 'self'; "
+                "base-uri 'self'; "
+                "form-action 'self'; "
+                "frame-ancestors 'none'"
+            ),
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+        },
+    )
 
 
 def _prune_auth_cache(now: float) -> None:
@@ -378,6 +414,26 @@ def health(_: Request):
         "audit": audit_stats_snapshot(),
         "idempotency": idempotency_snapshot(),
     }
+
+
+@app.route("GET", "/admin")
+def admin_console(_: Request):
+    return admin_console_asset("index.html")
+
+
+@app.route("GET", "/admin/index.html")
+def admin_console_index(_: Request):
+    return admin_console_asset("index.html")
+
+
+@app.route("GET", "/admin/styles.css")
+def admin_console_styles(_: Request):
+    return admin_console_asset("styles.css")
+
+
+@app.route("GET", "/admin/app.js")
+def admin_console_script(_: Request):
+    return admin_console_asset("app.js")
 
 
 @app.route("GET", "/api/v1/platform/topology")

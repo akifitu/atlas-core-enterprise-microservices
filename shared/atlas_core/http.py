@@ -35,6 +35,13 @@ class Request:
         return self.headers.get(name.lower(), default)
 
 
+@dataclass
+class HttpResponse:
+    body: bytes
+    content_type: str
+    headers: Optional[Dict[str, str]] = None
+
+
 Handler = Callable[[Request], Tuple[int, Any]]
 
 
@@ -88,12 +95,21 @@ class ServiceApp:
                 "request_id": request_id,
             }
 
-        body = json.dumps(payload).encode("utf-8")
+        extra_headers: Dict[str, str] = {}
+        if isinstance(payload, HttpResponse):
+            body = payload.body
+            content_type = payload.content_type
+            extra_headers = payload.headers or {}
+        else:
+            body = json.dumps(payload).encode("utf-8")
+            content_type = "application/json"
         handler.send_response(status_code)
-        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Type", content_type)
         handler.send_header("Content-Length", str(len(body)))
         handler.send_header("X-Service-Name", self.service_name)
         handler.send_header("X-Request-ID", request_id)
+        for key, value in extra_headers.items():
+            handler.send_header(key, value)
         handler.end_headers()
         handler.wfile.write(body)
 
