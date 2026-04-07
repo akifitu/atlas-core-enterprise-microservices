@@ -36,6 +36,7 @@ const elements = {
   statusBar: document.getElementById("status-bar"),
   actionSummary: document.getElementById("action-summary"),
   actionDetail: document.getElementById("action-detail"),
+  actionHistory: document.getElementById("action-history"),
   topologySummary: document.getElementById("topology-summary"),
   topologyGrid: document.getElementById("topology-grid"),
   alertsSummary: document.getElementById("alerts-summary"),
@@ -417,6 +418,7 @@ function renderPortfolioDashboard(dashboard) {
 function clearDashboardViews() {
   elements.actionSummary.innerHTML = "";
   elements.actionDetail.innerHTML = emptyState("Run an operator action to inspect export samples or retention impact.");
+  elements.actionHistory.innerHTML = emptyState("Recent operator actions will appear here.");
   elements.topologySummary.innerHTML = "";
   elements.topologyGrid.innerHTML = emptyState("Topology will appear after authentication.");
   elements.alertsSummary.innerHTML = "";
@@ -497,6 +499,63 @@ function renderActionResult(actionName, result) {
   ].join("");
 }
 
+function renderActionHistory(controlRoom) {
+  const actions = controlRoom.recent_actions || [];
+  const summary = controlRoom.recent_actions_summary || {};
+  if (!actions.length) {
+    elements.actionHistory.innerHTML = emptyState("No recorded operator actions for this tenant yet.");
+    return;
+  }
+
+  elements.actionHistory.innerHTML = [
+    '<article class="rank-item"><strong>Recent operator actions</strong><div class="list-muted">',
+    escapeHtml(String(summary.count || actions.length)),
+    " actions / latest ",
+    escapeHtml(formatTimestamp(summary.latest_action_at)),
+    "</div></article>",
+    actions
+      .map(function (event) {
+        const metadata = event.metadata || {};
+        const parameters = metadata.parameters || {};
+        const actionSummary = metadata.summary || {};
+        const chips = [];
+        if (parameters.retention_days !== null && parameters.retention_days !== undefined) {
+          chips.push("<span>retention_days: " + escapeHtml(String(parameters.retention_days)) + "</span>");
+        }
+        if (parameters.limit !== null && parameters.limit !== undefined) {
+          chips.push("<span>limit: " + escapeHtml(String(parameters.limit)) + "</span>");
+        }
+        if (actionSummary.would_delete !== null && actionSummary.would_delete !== undefined) {
+          chips.push("<span>would_delete: " + escapeHtml(String(actionSummary.would_delete)) + "</span>");
+        }
+        if (actionSummary.deleted_count !== null && actionSummary.deleted_count !== undefined) {
+          chips.push("<span>deleted_count: " + escapeHtml(String(actionSummary.deleted_count)) + "</span>");
+        }
+        if (actionSummary.count !== null && actionSummary.count !== undefined) {
+          chips.push("<span>exported: " + escapeHtml(String(actionSummary.count)) + "</span>");
+        }
+        if (actionSummary.dry_run !== null && actionSummary.dry_run !== undefined) {
+          chips.push("<span>dry_run: " + escapeHtml(String(actionSummary.dry_run)) + "</span>");
+        }
+        return [
+          '<article class="rank-item"><strong>',
+          escapeHtml(actionLabel(event.action)),
+          "</strong>",
+          '<div class="list-muted">',
+          escapeHtml(formatTimestamp(event.created_at)),
+          " / ",
+          escapeHtml(event.actor_role || "unknown"),
+          " / ",
+          escapeHtml(event.outcome || "unknown"),
+          '</div><div class="micro-list">',
+          chips.join("") || "<span>No parameters</span>",
+          "</div></article>",
+        ].join("");
+      })
+      .join(""),
+  ].join("");
+}
+
 async function fetchControlRoom(selectedPortfolioId) {
   const query = new URLSearchParams();
   query.set("top_n", String(state.topN));
@@ -555,6 +614,7 @@ function renderControlRoom(controlRoom) {
   renderAlerts(controlRoom.alert_summary);
   renderAudit(controlRoom.audit_summary);
   renderExecutive(controlRoom.executive_summary);
+  renderActionHistory(controlRoom);
   populatePortfolioSelect(controlRoom.executive_summary, controlRoom.selected_portfolio_id || "");
   if (controlRoom.portfolio_dashboard) {
     renderPortfolioDashboard(controlRoom.portfolio_dashboard);

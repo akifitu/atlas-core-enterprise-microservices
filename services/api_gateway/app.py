@@ -49,6 +49,7 @@ CONTROL_ROOM_ACTIONS = {
     "audit_retention_dry_run",
     "audit_retention_apply",
 }
+CONTROL_ROOM_ACTION_LIMIT = 10
 
 DEPENDENCIES = {
     "identity-service": IDENTITY_SERVICE_URL,
@@ -432,6 +433,7 @@ def record_control_room_action(
     status_code: int,
     payload: Any,
 ) -> None:
+    request_payload = request.body if isinstance(request.body, dict) else {}
     audit_payload = {
         "tenant_id": actor_context["tenant_id"],
         "actor_user_id": actor_context["user_id"],
@@ -449,6 +451,19 @@ def record_control_room_action(
         "metadata": {
             "response_error": payload.get("error") if isinstance(payload, dict) else None,
             "query": request.query,
+            "parameters": {
+                "top_n": request_payload.get("top_n"),
+                "portfolio_id": request_payload.get("portfolio_id"),
+                "limit": request_payload.get("limit"),
+                "retention_days": request_payload.get("retention_days"),
+            },
+            "summary": {
+                "dry_run": payload.get("dry_run") if isinstance(payload, dict) else None,
+                "count": payload.get("count") if isinstance(payload, dict) else None,
+                "would_delete": payload.get("would_delete") if isinstance(payload, dict) else None,
+                "deleted_count": payload.get("deleted_count") if isinstance(payload, dict) else None,
+                "cutoff": payload.get("cutoff") if isinstance(payload, dict) else None,
+            },
         },
     }
     submit_audit_payload(request.request_id, audit_payload)
@@ -565,6 +580,17 @@ def post_operator_payload(
     )
 
 
+def fetch_control_room_recent_actions(headers: Dict[str, str]) -> Dict[str, Any]:
+    return fetch_operator_payload(
+        "audit-service",
+        AUDIT_SERVICE_URL,
+        "/events?{0}".format(
+            urlencode({"resource": "control_room", "limit": CONTROL_ROOM_ACTION_LIMIT})
+        ),
+        headers,
+    )
+
+
 def build_control_room_payload(
     request_id: str,
     actor_context: Dict[str, Any],
@@ -573,7 +599,7 @@ def build_control_room_payload(
 ) -> Dict[str, Any]:
     headers = actor_headers(actor_context, request_id)
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         topology_future = executor.submit(platform_topology_payload, request_id)
         alert_summary_future = executor.submit(
             fetch_operator_payload,
@@ -596,11 +622,13 @@ def build_control_room_payload(
             "/executive-summary?{0}".format(urlencode({"top_n": top_n})),
             headers,
         )
+        recent_actions_future = executor.submit(fetch_control_room_recent_actions, headers)
 
         topology_payload = topology_future.result()
         alert_summary_payload = alert_summary_future.result()
         audit_summary_payload = audit_summary_future.result()
         executive_summary_payload = executive_summary_future.result()
+        recent_actions_payload = recent_actions_future.result()
 
     portfolio_selection = select_control_room_portfolio(executive_summary_payload, requested_portfolio_id)
     selected_portfolio_id = portfolio_selection["portfolio_id"]
@@ -622,6 +650,11 @@ def build_control_room_payload(
         "selected_portfolio_id": selected_portfolio_id,
         "selection_mode": portfolio_selection["selection_mode"],
         "portfolio_dashboard": portfolio_dashboard_payload,
+        "recent_actions": recent_actions_payload["events"],
+        "recent_actions_summary": {
+            "count": len(recent_actions_payload["events"]),
+            "latest_action_at": recent_actions_payload["events"][0]["created_at"] if recent_actions_payload["events"] else None,
+        },
     }
 
 
@@ -706,8 +739,8 @@ def control_room_actions(request: Request):
                 "dry_run": action_name == "audit_retention_dry_run",
             },
         )
-        if action_name == "audit_retention_apply":
-            record_control_room_action(request, actor_context, action_name, 200, result)
+
+    record_control_room_action(request, actor_context, action_name, 200, result)
 
     return 200, {
         "action": action_name,

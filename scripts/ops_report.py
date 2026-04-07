@@ -137,6 +137,8 @@ def main() -> int:
                 "audit_summary": {"summary": control_room["audit_summary"]},
                 "selected_portfolio_id": control_room["selected_portfolio_id"],
                 "selection_mode": control_room["selection_mode"],
+                "recent_actions_summary": control_room["recent_actions_summary"],
+                "recent_actions": control_room["recent_actions"],
             }
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)

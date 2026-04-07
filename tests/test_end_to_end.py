@@ -330,6 +330,8 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(control_room["executive_summary"]["totals"]["projects"], 1)
         self.assertEqual(control_room["portfolio_dashboard"]["portfolio"]["id"], portfolio["id"])
         self.assertEqual(control_room["portfolio_dashboard"]["totals"]["blocked_work_items"], 1)
+        self.assertEqual(control_room["recent_actions"], [])
+        self.assertEqual(control_room["recent_actions_summary"]["count"], 0)
 
     def test_control_room_actions_execute_export_and_retention(self) -> None:
         bootstrap = self.bootstrap_admin_session("Atlas Control Action Tenant")
@@ -369,6 +371,8 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(export_action["action"], "audit_export")
         self.assertGreaterEqual(export_action["result"]["count"], 3)
         self.assertEqual(export_action["control_room"]["selected_portfolio_id"], portfolio["id"])
+        self.assertEqual(export_action["control_room"]["recent_actions"][0]["action"], "audit_export")
+        self.assertEqual(export_action["control_room"]["recent_actions"][0]["metadata"]["parameters"]["limit"], 5)
 
         preview_action = self.gateway_request(
             "POST",
@@ -379,6 +383,8 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(preview_action["action"], "audit_retention_dry_run")
         self.assertTrue(preview_action["result"]["dry_run"])
         self.assertGreaterEqual(preview_action["result"]["would_delete"], 3)
+        self.assertEqual(preview_action["control_room"]["recent_actions"][0]["action"], "audit_retention_dry_run")
+        self.assertTrue(any(event["action"] == "audit_export" for event in preview_action["control_room"]["recent_actions"]))
 
         apply_action = self.gateway_request(
             "POST",
@@ -390,6 +396,12 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertFalse(apply_action["result"]["dry_run"])
         self.assertGreaterEqual(apply_action["result"]["deleted_count"], 3)
         self.assertLess(apply_action["control_room"]["audit_summary"]["total_events"], preview_action["control_room"]["audit_summary"]["total_events"])
+        self.assertEqual(apply_action["control_room"]["recent_actions"][0]["action"], "audit_retention_apply")
+        self.assertEqual(apply_action["control_room"]["recent_actions_summary"]["count"], 1)
+        self.assertEqual(
+            apply_action["control_room"]["recent_actions"][0]["metadata"]["parameters"]["retention_days"],
+            0,
+        )
 
     def test_viewer_role_cannot_mutate_portfolio(self) -> None:
         bootstrap = self.bootstrap_admin_session("Atlas Viewer Tenant")
