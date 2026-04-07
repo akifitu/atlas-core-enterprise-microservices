@@ -12,6 +12,7 @@ SERVICE_NAME = "finance-service"
 HOST = env("FINANCE_SERVICE_HOST", "127.0.0.1")
 PORT = env("FINANCE_SERVICE_PORT", 7004, int)
 DATABASE_PATH = env("FINANCE_DB_PATH", "runtime/finance-service.db")
+PORTFOLIO_SERVICE_URL = service_url("portfolio-service", 7002)
 NOTIFICATION_SERVICE_URL = service_url("notification-service", 7005)
 
 db = Database(DATABASE_PATH or "runtime/finance-service.db")
@@ -82,6 +83,33 @@ def budget_by_project(tenant_id: str, project_id: str) -> Dict[str, Any]:
     return budget
 
 
+def actor_headers(actor: Dict[str, str], request: Request) -> Dict[str, str]:
+    return {
+        "X-Tenant-ID": actor["tenant_id"],
+        "X-User-ID": actor["user_id"],
+        "X-User-Role": actor["role"],
+        "X-Request-ID": request.request_id,
+    }
+
+
+def require_project(actor: Dict[str, str], request: Request, project_id: str) -> Dict[str, Any]:
+    status_code, payload = request_json(
+        "GET",
+        PORTFOLIO_SERVICE_URL,
+        "/projects/{0}".format(project_id),
+        headers=actor_headers(actor, request),
+    )
+    if status_code == 404:
+        raise AppError(404, "project_not_found", {"project_id": project_id})
+    if status_code >= 400:
+        raise AppError(
+            502,
+            "portfolio_dependency_failed",
+            {"project_id": project_id, "status_code": status_code, "payload": payload},
+        )
+    return payload["project"]
+
+
 def finance_status(tenant_id: str, project_id: str) -> Dict[str, Any]:
     budget = db.fetchone(
         "SELECT * FROM project_budgets WHERE tenant_id = ? AND project_id = ?",
@@ -141,6 +169,7 @@ def health(_: Request):
 @app.route("POST", "/projects/{project_id}/budget")
 def set_budget(request: Request):
     actor = require_admin(request)
+    project = require_project(actor, request, request.path_params["project_id"])
     payload = require_json_object(request)
     total_budget = require_number(payload, "total_budget")
     currency = require_field(payload, "currency").upper()
@@ -148,7 +177,7 @@ def set_budget(request: Request):
 
     existing = db.fetchone(
         "SELECT id FROM project_budgets WHERE tenant_id = ? AND project_id = ?",
-        (actor["tenant_id"], request.path_params["project_id"]),
+        (actor["tenant_id"], project["id"]),
     )
     if existing:
         db.execute(
@@ -168,7 +197,7 @@ def set_budget(request: Request):
             (
                 str(uuid.uuid4()),
                 actor["tenant_id"],
-                request.path_params["project_id"],
+                project["id"],
                 total_budget,
                 currency,
                 timestamp,
@@ -176,16 +205,17 @@ def set_budget(request: Request):
             ),
         )
 
-    return 201, finance_status(actor["tenant_id"], request.path_params["project_id"])
+    return 201, finance_status(actor["tenant_id"], project["id"])
 
 
 @app.route("POST", "/projects/{project_id}/expenses")
 def create_expense(request: Request):
     actor = require_admin(request)
+    project = require_project(actor, request, request.path_params["project_id"])
     payload = require_json_object(request)
     amount = require_number(payload, "amount")
     category = require_field(payload, "category")
-    budget = budget_by_project(actor["tenant_id"], request.path_params["project_id"])
+    budget = budget_by_project(actor["tenant_id"], project["id"])
 
     db.execute(
         """
@@ -195,17 +225,17 @@ def create_expense(request: Request):
         (
             str(uuid.uuid4()),
             actor["tenant_id"],
-            request.path_params["project_id"],
+            project["id"],
             amount,
             category,
             utc_now(),
         ),
     )
 
-    status = finance_status(actor["tenant_id"], request.path_params["project_id"])
+    status = finance_status(actor["tenant_id"], project["id"])
     utilization_pct = status["totals"]["utilization_pct"]
     if utilization_pct >= 85:
-        publish_budget_alert(actor["tenant_id"], request.path_params["project_id"], utilization_pct)
+        publish_budget_alert(actor["tenant_id"], project["id"], utilization_pct)
 
     return 201, {
         "budget": budget,
@@ -217,7 +247,8 @@ def create_expense(request: Request):
 @app.route("GET", "/projects/{project_id}/status")
 def get_status(request: Request):
     actor = require_actor(request)
-    return 200, finance_status(actor["tenant_id"], request.path_params["project_id"])
+    project = require_project(actor, request, request.path_params["project_id"])
+    return 200, finance_status(actor["tenant_id"], project["id"])
 
 
 if __name__ == "__main__":

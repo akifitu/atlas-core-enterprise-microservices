@@ -12,6 +12,7 @@ SERVICE_NAME = "delivery-service"
 HOST = env("DELIVERY_SERVICE_HOST", "127.0.0.1")
 PORT = env("DELIVERY_SERVICE_PORT", 7003, int)
 DATABASE_PATH = env("DELIVERY_DB_PATH", "runtime/delivery-service.db")
+PORTFOLIO_SERVICE_URL = service_url("portfolio-service", 7002)
 NOTIFICATION_SERVICE_URL = service_url("notification-service", 7005)
 
 db = Database(DATABASE_PATH or "runtime/delivery-service.db")
@@ -67,6 +68,33 @@ def work_item_by_id(tenant_id: str, work_item_id: str) -> Dict[str, Any]:
     return item
 
 
+def actor_headers(actor: Dict[str, str], request: Request) -> Dict[str, str]:
+    return {
+        "X-Tenant-ID": actor["tenant_id"],
+        "X-User-ID": actor["user_id"],
+        "X-User-Role": actor["role"],
+        "X-Request-ID": request.request_id,
+    }
+
+
+def require_project(actor: Dict[str, str], request: Request, project_id: str) -> Dict[str, Any]:
+    status_code, payload = request_json(
+        "GET",
+        PORTFOLIO_SERVICE_URL,
+        "/projects/{0}".format(project_id),
+        headers=actor_headers(actor, request),
+    )
+    if status_code == 404:
+        raise AppError(404, "project_not_found", {"project_id": project_id})
+    if status_code >= 400:
+        raise AppError(
+            502,
+            "portfolio_dependency_failed",
+            {"project_id": project_id, "status_code": status_code, "payload": payload},
+        )
+    return payload["project"]
+
+
 def publish_blocked_alert(tenant_id: str, project_id: str, title: str, blocked_reason: str) -> None:
     request_json(
         "POST",
@@ -95,6 +123,7 @@ def health(_: Request):
 @app.route("POST", "/projects/{project_id}/work-items")
 def create_work_item(request: Request):
     actor = require_admin(request)
+    project = require_project(actor, request, request.path_params["project_id"])
     payload = require_json_object(request)
     title = require_field(payload, "title")
     priority = payload.get("priority", "medium")
@@ -116,7 +145,7 @@ def create_work_item(request: Request):
         (
             work_item_id,
             actor["tenant_id"],
-            request.path_params["project_id"],
+            project["id"],
             title,
             "backlog",
             priority,
@@ -133,13 +162,14 @@ def create_work_item(request: Request):
 @app.route("GET", "/projects/{project_id}/work-items")
 def list_work_items(request: Request):
     actor = require_actor(request)
+    project = require_project(actor, request, request.path_params["project_id"])
     items = db.fetchall(
         """
         SELECT * FROM work_items
         WHERE tenant_id = ? AND project_id = ?
         ORDER BY created_at ASC
         """,
-        (actor["tenant_id"], request.path_params["project_id"]),
+        (actor["tenant_id"], project["id"]),
     )
     return 200, {"work_items": items}
 
@@ -182,16 +212,17 @@ def update_work_item_status(request: Request):
 @app.route("GET", "/projects/{project_id}/summary")
 def project_summary(request: Request):
     actor = require_actor(request)
+    project = require_project(actor, request, request.path_params["project_id"])
     items = db.fetchall(
         """
         SELECT * FROM work_items
         WHERE tenant_id = ? AND project_id = ?
         ORDER BY created_at ASC
         """,
-        (actor["tenant_id"], request.path_params["project_id"]),
+        (actor["tenant_id"], project["id"]),
     )
     return 200, {
-        "project_id": request.path_params["project_id"],
+        "project_id": project["id"],
         "work_items": items,
         "totals": {
             "count": len(items),

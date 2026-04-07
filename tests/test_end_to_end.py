@@ -490,6 +490,29 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(len(summary["portfolios"]), 2)
         self.assertTrue(any(item["portfolio"]["id"] == healthy_portfolio["id"] for item in summary["portfolios"]))
 
+    def test_mutations_reject_unknown_project_ids(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Integrity Tenant")
+        token = bootstrap["token"]
+        missing_project_id = "00000000-0000-0000-0000-000000000404"
+
+        status_code, payload = self.gateway_request_raw(
+            "POST",
+            "/api/v1/delivery/projects/{0}/work-items".format(missing_project_id),
+            {"title": "Should fail", "assignee": "Nobody"},
+            token=token,
+        )
+        self.assertEqual(status_code, 404)
+        self.assertEqual(payload["error"], "project_not_found")
+
+        status_code, payload = self.gateway_request_raw(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(missing_project_id),
+            {"total_budget": 1000, "currency": "USD"},
+            token=token,
+        )
+        self.assertEqual(status_code, 404)
+        self.assertEqual(payload["error"], "project_not_found")
+
 
 if __name__ == "__main__":
     unittest.main()
