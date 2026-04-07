@@ -89,10 +89,13 @@ class AtlasCoreE2ETest(unittest.TestCase):
         path: str,
         payload: Optional[Dict] = None,
         token: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict:
         headers = {}
         if token:
             headers["Authorization"] = "Bearer {0}".format(token)
+        if extra_headers:
+            headers.update(extra_headers)
         status_code, response_payload = request_json(method, self.gateway_url, path, payload, headers)
         self.assertLess(status_code, 400, msg="Request failed: {0} {1} => {2} {3}".format(method, path, status_code, response_payload))
         return response_payload
@@ -103,10 +106,13 @@ class AtlasCoreE2ETest(unittest.TestCase):
         path: str,
         payload: Optional[Dict] = None,
         token: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Tuple[int, Dict]:
         headers = {}
         if token:
             headers["Authorization"] = "Bearer {0}".format(token)
+        if extra_headers:
+            headers.update(extra_headers)
         return request_json(method, self.gateway_url, path, payload, headers)
 
     def bootstrap_admin_session(self, tenant_name_prefix: str = "Atlas Test Tenant") -> Dict:
@@ -307,6 +313,64 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertTrue(any(event["resource"] == "portfolio" for event in events))
         self.assertTrue(any(event["entity_id"] == portfolio["id"] for event in events))
         self.assertTrue(all(event["tenant_id"] == bootstrap["tenant"]["id"] for event in events))
+
+    def test_idempotency_replays_mutation_without_duplication(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Idempotency Tenant")
+        token = bootstrap["token"]
+        idempotency_headers = {"Idempotency-Key": "portfolio-create-fixed-key"}
+
+        first = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Duplicate Safe Portfolio"},
+            token=token,
+            extra_headers=idempotency_headers,
+        )["portfolio"]
+        second = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Duplicate Safe Portfolio"},
+            token=token,
+            extra_headers=idempotency_headers,
+        )["portfolio"]
+
+        self.assertEqual(first["id"], second["id"])
+
+        portfolios = self.gateway_request("GET", "/api/v1/portfolio/portfolios", token=token)["portfolios"]
+        self.assertEqual(len(portfolios), 1)
+
+        topology = self.gateway_request("GET", "/api/v1/platform/topology", token=token)
+        self.assertGreaterEqual(topology["idempotency"]["hits"], 1)
+
+        audit_events = self.gateway_request(
+            "GET",
+            "/api/v1/platform/audit-events?resource=portfolio&limit=20",
+            token=token,
+        )["events"]
+        self.assertEqual(len([event for event in audit_events if event["action"] == "create_portfolio"]), 1)
+
+    def test_idempotency_conflict_rejects_changed_payload(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Conflict Tenant")
+        token = bootstrap["token"]
+        idempotency_headers = {"Idempotency-Key": "conflicting-key"}
+
+        self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Conflict Base Portfolio"},
+            token=token,
+            extra_headers=idempotency_headers,
+        )
+
+        status_code, payload = self.gateway_request_raw(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Conflict Changed Portfolio"},
+            token=token,
+            extra_headers=idempotency_headers,
+        )
+        self.assertEqual(status_code, 409)
+        self.assertEqual(payload["error"], "idempotency_key_conflict")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import time
 from threading import Lock
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urlencode
+import json
 
 from shared.atlas_core.config import env, service_url, utc_now
 from shared.atlas_core.http import AppError, Request, ServiceApp, run_service
@@ -22,13 +23,18 @@ AUDIT_SERVICE_URL = service_url("audit-service", 7007)
 AUDIT_SERVICE_TOKEN = env("AUDIT_SERVICE_TOKEN", "atlas-internal-audit") or "atlas-internal-audit"
 AUTH_CACHE_TTL_SECONDS = env("API_GATEWAY_AUTH_CACHE_TTL_SECONDS", 30, int) or 30
 AUTH_CACHE_MAX_ENTRIES = env("API_GATEWAY_AUTH_CACHE_MAX_ENTRIES", 1024, int) or 1024
+IDEMPOTENCY_TTL_SECONDS = env("API_GATEWAY_IDEMPOTENCY_TTL_SECONDS", 600, int) or 600
+IDEMPOTENCY_MAX_ENTRIES = env("API_GATEWAY_IDEMPOTENCY_MAX_ENTRIES", 2048, int) or 2048
 
 app = ServiceApp(SERVICE_NAME)
 AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
 AUTH_CACHE_STATS = {"hits": 0, "misses": 0}
 AUDIT_STATS = {"recorded": 0, "failed": 0}
+IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
+IDEMPOTENCY_STATS = {"hits": 0, "misses": 0, "stored": 0, "conflicts": 0}
 AUTH_CACHE_LOCK = Lock()
 AUDIT_STATS_LOCK = Lock()
+IDEMPOTENCY_LOCK = Lock()
 
 DEPENDENCIES = {
     "identity-service": IDENTITY_SERVICE_URL,
@@ -71,6 +77,105 @@ def auth_cache_snapshot() -> Dict[str, Any]:
 def audit_stats_snapshot() -> Dict[str, Any]:
     with AUDIT_STATS_LOCK:
         return dict(AUDIT_STATS)
+
+
+def _prune_idempotency_store(now: float) -> None:
+    expired_keys = [key for key, item in IDEMPOTENCY_STORE.items() if item["expires_at"] <= now]
+    for key in expired_keys:
+        IDEMPOTENCY_STORE.pop(key, None)
+
+    if len(IDEMPOTENCY_STORE) < IDEMPOTENCY_MAX_ENTRIES:
+        return
+
+    overflow = len(IDEMPOTENCY_STORE) - IDEMPOTENCY_MAX_ENTRIES + 1
+    oldest_keys = sorted(IDEMPOTENCY_STORE.items(), key=lambda item: item[1]["expires_at"])[:overflow]
+    for key, _ in oldest_keys:
+        IDEMPOTENCY_STORE.pop(key, None)
+
+
+def idempotency_snapshot() -> Dict[str, Any]:
+    now = time.time()
+    with IDEMPOTENCY_LOCK:
+        _prune_idempotency_store(now)
+        return {
+            "hits": IDEMPOTENCY_STATS["hits"],
+            "misses": IDEMPOTENCY_STATS["misses"],
+            "stored": IDEMPOTENCY_STATS["stored"],
+            "conflicts": IDEMPOTENCY_STATS["conflicts"],
+            "entries": len(IDEMPOTENCY_STORE),
+            "ttl_seconds": IDEMPOTENCY_TTL_SECONDS,
+            "max_entries": IDEMPOTENCY_MAX_ENTRIES,
+        }
+
+
+def idempotency_fingerprint(request: Request, scope: str) -> str:
+    return json.dumps(
+        {
+            "scope": scope,
+            "method": request.method,
+            "path": request.path,
+            "query": request.query,
+            "body": request.body,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def idempotency_cache_key(scope: str, key: str) -> str:
+    return "{0}:{1}".format(scope, key)
+
+
+def idempotency_scope(actor_context: Optional[Dict[str, Any]]) -> str:
+    if actor_context:
+        return actor_context["tenant_id"]
+    return "anonymous"
+
+
+def mutable_request(request: Request) -> bool:
+    return request.method in ("POST", "PATCH", "PUT", "DELETE")
+
+
+def get_idempotency_replay(request: Request, scope: str) -> Optional[Dict[str, Any]]:
+    idempotency_key = request.header("idempotency-key")
+    if not idempotency_key or not mutable_request(request):
+        return None
+
+    now = time.time()
+    fingerprint = idempotency_fingerprint(request, scope)
+    cache_key = idempotency_cache_key(scope, idempotency_key)
+    with IDEMPOTENCY_LOCK:
+        _prune_idempotency_store(now)
+        record = IDEMPOTENCY_STORE.get(cache_key)
+        if record is None:
+            IDEMPOTENCY_STATS["misses"] += 1
+            return None
+        if record["fingerprint"] != fingerprint:
+            IDEMPOTENCY_STATS["conflicts"] += 1
+            raise AppError(409, "idempotency_key_conflict", {"idempotency_key": idempotency_key})
+        IDEMPOTENCY_STATS["hits"] += 1
+        return {
+            "status_code": record["status_code"],
+            "payload": record["payload"],
+        }
+
+
+def store_idempotency_result(request: Request, scope: str, status_code: int, payload: Any) -> None:
+    idempotency_key = request.header("idempotency-key")
+    if not idempotency_key or not mutable_request(request):
+        return
+
+    cache_key = idempotency_cache_key(scope, idempotency_key)
+    fingerprint = idempotency_fingerprint(request, scope)
+    with IDEMPOTENCY_LOCK:
+        _prune_idempotency_store(time.time())
+        IDEMPOTENCY_STORE[cache_key] = {
+            "fingerprint": fingerprint,
+            "status_code": status_code,
+            "payload": payload,
+            "expires_at": time.time() + IDEMPOTENCY_TTL_SECONDS,
+        }
+        IDEMPOTENCY_STATS["stored"] += 1
 
 
 def require_platform_operator(request: Request) -> Dict[str, Any]:
@@ -137,6 +242,10 @@ def proxy_request(
     else:
         headers["X-Request-ID"] = request.request_id
 
+    replay = get_idempotency_replay(request, idempotency_scope(actor_context))
+    if replay is not None:
+        return replay["status_code"], replay["payload"]
+
     query_suffix = ""
     if request.query:
         query_suffix = "?" + urlencode(request.query, doseq=True)
@@ -148,6 +257,7 @@ def proxy_request(
         payload=request.body if isinstance(request.body, dict) else None,
         headers=headers,
     )
+    store_idempotency_result(request, idempotency_scope(actor_context), status_code, payload)
     if actor_context and request.method in ("POST", "PATCH", "PUT", "DELETE"):
         record_audit_event(request, actor_context, service_url_value, internal_path, status_code, payload)
     return status_code, payload
@@ -263,6 +373,7 @@ def health(_: Request):
         "service": SERVICE_NAME,
         "auth_cache": auth_cache_snapshot(),
         "audit": audit_stats_snapshot(),
+        "idempotency": idempotency_snapshot(),
     }
 
 
@@ -286,6 +397,7 @@ def topology(request: Request):
         "services": services,
         "auth_cache": auth_cache_snapshot(),
         "audit": audit_stats_snapshot(),
+        "idempotency": idempotency_snapshot(),
         "summary": {
             "healthy_services": len(services) - len(degraded_services),
             "degraded_services": degraded_services,
