@@ -1,0 +1,414 @@
+openapi: 3.0.3
+info:
+  title: Atlas Core Gateway API
+  version: 1.0.0
+  description: >
+    Public gateway contract for the Atlas Core enterprise microservice platform.
+    The gateway centralizes authentication, tenant context propagation, audit-aware mutations,
+    and executive reporting endpoints.
+servers:
+  - url: http://127.0.0.1:7000
+    description: Local development gateway
+tags:
+  - name: Identity
+  - name: Portfolio
+  - name: Delivery
+  - name: Finance
+  - name: Notifications
+  - name: Analytics
+  - name: Platform
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        service:
+          type: string
+        request_id:
+          type: string
+    BootstrapAdminRequest:
+      type: object
+      required:
+        - tenant_name
+        - tenant_slug
+        - admin_email
+        - admin_password
+        - admin_name
+      properties:
+        tenant_name:
+          type: string
+        tenant_slug:
+          type: string
+        admin_email:
+          type: string
+        admin_password:
+          type: string
+        admin_name:
+          type: string
+    SessionRequest:
+      type: object
+      required:
+        - tenant_slug
+        - email
+        - password
+      properties:
+        tenant_slug:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+    UserRequest:
+      type: object
+      required:
+        - email
+        - password
+        - display_name
+        - role
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+        display_name:
+          type: string
+        role:
+          type: string
+          enum: [admin, portfolio_manager, delivery_lead, finance_manager, viewer]
+    PortfolioRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, paused, completed]
+    ProjectRequest:
+      type: object
+      required:
+        - name
+        - code
+        - start_date
+        - target_date
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+        status:
+          type: string
+          enum: [planned, active, paused, completed]
+        start_date:
+          type: string
+        target_date:
+          type: string
+    WorkItemRequest:
+      type: object
+      required:
+        - title
+        - assignee
+      properties:
+        title:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        assignee:
+          type: string
+        due_date:
+          type: string
+    WorkItemStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [backlog, in_progress, blocked, done]
+        blocked_reason:
+          type: string
+    BudgetRequest:
+      type: object
+      required:
+        - total_budget
+        - currency
+      properties:
+        total_budget:
+          type: number
+        currency:
+          type: string
+    ExpenseRequest:
+      type: object
+      required:
+        - amount
+        - category
+      properties:
+        amount:
+          type: number
+        category:
+          type: string
+paths:
+  /health:
+    get:
+      tags: [Platform]
+      summary: Gateway health and cache stats
+      responses:
+        "200":
+          description: Gateway is healthy
+  /api/v1/identity/bootstrap-admin:
+    post:
+      tags: [Identity]
+      summary: Bootstrap a tenant and first admin user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapAdminRequest"
+      responses:
+        "201":
+          description: Tenant and admin session created
+        "409":
+          description: Tenant slug already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/identity/sessions:
+    post:
+      tags: [Identity]
+      summary: Create a user session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionRequest"
+      responses:
+        "201":
+          description: Session created
+        "401":
+          description: Invalid credentials
+  /api/v1/identity/users:
+    post:
+      tags: [Identity]
+      summary: Create a tenant-scoped user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRequest"
+      responses:
+        "201":
+          description: User created
+        "403":
+          description: Admin role required
+  /api/v1/portfolio/portfolios:
+    get:
+      tags: [Portfolio]
+      summary: List tenant portfolios
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Portfolio list
+    post:
+      tags: [Portfolio]
+      summary: Create a portfolio
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PortfolioRequest"
+      responses:
+        "201":
+          description: Portfolio created
+  /api/v1/portfolio/portfolios/{portfolio_id}/projects:
+    post:
+      tags: [Portfolio]
+      summary: Create a project inside a portfolio
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: portfolio_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectRequest"
+      responses:
+        "201":
+          description: Project created
+  /api/v1/delivery/projects/{project_id}/work-items:
+    post:
+      tags: [Delivery]
+      summary: Create a work item
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkItemRequest"
+      responses:
+        "201":
+          description: Work item created
+  /api/v1/delivery/work-items/{work_item_id}/status:
+    patch:
+      tags: [Delivery]
+      summary: Update work item status
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: work_item_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkItemStatusRequest"
+      responses:
+        "200":
+          description: Work item updated
+  /api/v1/finance/projects/{project_id}/budget:
+    post:
+      tags: [Finance]
+      summary: Set or replace a project budget
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetRequest"
+      responses:
+        "201":
+          description: Budget saved
+  /api/v1/finance/projects/{project_id}/expenses:
+    post:
+      tags: [Finance]
+      summary: Record a project expense
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExpenseRequest"
+      responses:
+        "201":
+          description: Expense recorded
+  /api/v1/notifications/alerts:
+    get:
+      tags: [Notifications]
+      summary: List alerts for the current tenant
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [open, acked]
+      responses:
+        "200":
+          description: Alert list
+  /api/v1/analytics/dashboard:
+    get:
+      tags: [Analytics]
+      summary: Build executive dashboard for a portfolio
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: portfolio_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Dashboard payload
+  /api/v1/platform/topology:
+    get:
+      tags: [Platform]
+      summary: Inspect platform dependency health
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Topology report
+  /api/v1/platform/audit-events:
+    get:
+      tags: [Platform]
+      summary: Read tenant-scoped audit events
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: service_name
+          schema:
+            type: string
+        - in: query
+          name: resource
+          schema:
+            type: string
+        - in: query
+          name: outcome
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit event list

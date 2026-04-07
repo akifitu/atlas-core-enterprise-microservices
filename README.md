@@ -13,6 +13,7 @@ The fictional product solves a common enterprise pain point: leadership can fund
 - Delivery execution and blockers
 - Budget planning and expense tracking
 - Alerting for blocked work and budget thresholds
+- Tenant-scoped audit trails for state-changing operations
 - Executive dashboards aggregated across services
 
 ## Service Topology
@@ -26,12 +27,14 @@ The fictional product solves a common enterprise pain point: leadership can fund
 | `finance-service` | `7004` | Budgets, expenses, utilization thresholds |
 | `notification-service` | `7005` | Operational alerts and acknowledgements |
 | `analytics-service` | `7006` | Cross-service executive dashboard aggregation |
+| `audit-service` | `7007` | Tenant-scoped audit event ingestion and query |
 
 ## Architecture Highlights
 
 - Multi-tenant isolation via `X-Tenant-ID` propagated by the gateway
 - Gateway-centralized bearer token validation
 - Gateway-side auth cache to reduce repeated identity lookups
+- Central audit trail for every authenticated state-changing request
 - SQLite-backed independent persistence per service
 - Synchronous service-to-service calls for analytics and alert creation
 - Request tracing via `X-Request-ID`
@@ -87,6 +90,13 @@ ATLAS_TOKEN=<token> python3 scripts/ops_report.py
 
 This returns service health, gateway auth cache metrics, and a platform summary from `GET /api/v1/platform/topology`.
 
+### 5. Read audit trail
+
+```bash
+curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
+  -H "Authorization: Bearer <token>"
+```
+
 ## Main Flows
 
 ### Tenant and Auth
@@ -118,7 +128,8 @@ The analytics service composes project, delivery, finance, and alert data into a
 ### Platform Operations
 
 1. `GET /api/v1/platform/topology`
-2. Inspect per-service health, latency, and gateway auth cache metrics
+2. `GET /api/v1/platform/audit-events`
+3. Inspect per-service health, latency, auth cache, and tenant audit history
 
 ## Why This Works As A Portfolio Project
 
@@ -131,5 +142,7 @@ The analytics service composes project, delivery, finance, and alert data into a
 
 - `docs/architecture.md`
 - `docs/implementation-plan.md`
+- `docs/openapi-gateway.yaml`
+- `docs/api-examples.md`
 - `infra/docker-compose.yml`
 - `.github/workflows/ci.yml`

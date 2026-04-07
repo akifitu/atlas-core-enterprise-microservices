@@ -59,11 +59,13 @@ Atlas Core was selected as a multi-tenant enterprise PPM platform using Python s
 - Gateway auth cache and platform topology endpoint
 - Request tracing and dependency resilience handling
 - Query indexing and parallel analytics aggregation
+- Tenant audit trail service and audit event query surface
 - Alerting and analytics
 - Local runner
 - Demo script
 - End-to-end test
 - CI workflow
+- OpenAPI contract and API usage examples
 - Documentation
 
 ## Next Logical Extensions

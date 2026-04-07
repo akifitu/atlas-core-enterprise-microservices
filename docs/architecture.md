@@ -41,6 +41,12 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - Stores open and acknowledged alerts
 - Provides a simple alert inbox for operational governance
 
+### Audit Service
+
+- Receives tenant-scoped audit events for authenticated write operations
+- Stores actor, request, resource, outcome, and entity references
+- Exposes searchable audit history for admin and portfolio operators
+
 ### Analytics Service
 
 - Aggregates data from portfolio, delivery, finance, and notification services
@@ -52,8 +58,9 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 2. The gateway validates the bearer token via `identity-service`.
 3. The gateway forwards the request with `X-Tenant-ID`, `X-User-ID`, `X-User-Role`, and `X-Request-ID`.
 4. Domain services execute tenant-scoped logic against their own SQLite databases.
-5. Delivery and finance publish operational alerts by calling `notification-service`.
-6. `analytics-service` composes read models across services for executive reporting.
+5. The gateway records authenticated write operations into `audit-service`.
+6. Delivery and finance publish operational alerts by calling `notification-service`.
+7. `analytics-service` composes read models across services for executive reporting.
 
 ## Data Strategy
 
@@ -74,6 +81,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - SQLite indexes were added around tenant-scoped and project-scoped lookup paths.
 - Analytics aggregates project summaries in parallel for larger portfolios.
 - Gateway topology reporting makes dependency regressions visible without opening every service separately.
+- Audit event ingestion keeps compliance-relevant mutation history queryable per tenant.
 
 ## Tradeoffs
 
