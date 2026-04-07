@@ -139,6 +139,16 @@ curl -s http://127.0.0.1:7000/api/v1/platform/alert-summary \
   -H "Authorization: Bearer $ATLAS_TOKEN"
 ```
 
+## Open The Admin Control Room
+
+Open `http://127.0.0.1:7000/admin` in a browser and paste an admin or `portfolio_manager` token. The UI loads its data from:
+
+- `GET /api/v1/platform/topology`
+- `GET /api/v1/platform/alert-summary`
+- `GET /api/v1/platform/audit-summary`
+- `GET /api/v1/analytics/executive-summary`
+- `GET /api/v1/analytics/dashboard?portfolio_id=<id>`
+
 ## Operator Shortcuts
 
 ```bash

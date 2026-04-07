@@ -170,6 +170,12 @@ def main() -> int:
             {
                 "tenant": bootstrap["tenant"],
                 "admin_user": bootstrap["user"],
+                "control_room": {
+                    "url": "{0}/admin".format((GATEWAY_URL or "http://127.0.0.1:7000").rstrip("/")),
+                    "token": token,
+                    "portfolio_id": portfolio["id"],
+                    "top_n": 3,
+                },
                 "created_user": created_user["user"],
                 "portfolio": portfolio,
                 "projects": [project_alpha, project_beta],

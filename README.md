@@ -41,6 +41,7 @@ The fictional product solves a common enterprise pain point: leadership can fund
 - Audit governance controls for summary, export, and retention operations
 - Request tracing via `X-Request-ID`
 - Clear internal and external API separation
+- Gateway-served admin control room for live operator visibility
 - Executable end-to-end test that boots the full stack
 - GitHub Actions CI for compile and full-stack verification
 
@@ -53,6 +54,7 @@ The fictional product solves a common enterprise pain point: leadership can fund
 ├── scripts/
 ├── services/
 ├── shared/
+├── ui/
 └── tests/
 ```
 
@@ -84,6 +86,8 @@ python3 scripts/demo_flow.py
 
 The script bootstraps a tenant, creates users, creates a portfolio and projects, records blocked work and budget overruns, then fetches the executive dashboard.
 
+The output also includes a `control_room` block with a ready-to-use `/admin` URL, bearer token, and portfolio ID for the operator console.
+
 ### 3. Run the end-to-end test
 
 ```bash
@@ -100,14 +104,24 @@ ATLAS_TOKEN=<token> python3 scripts/ops_report.py
 
 This returns service health, gateway auth cache metrics, and a platform summary from `GET /api/v1/platform/topology`.
 
-### 5. Read audit trail
+### 5. Open the admin console
+
+After bootstrap or `scripts/demo_flow.py`, open:
+
+```text
+http://127.0.0.1:7000/admin
+```
+
+Paste the bearer token into the control room and it will load live topology, alert summary, audit summary, and portfolio drilldown views.
+
+### 6. Read audit trail
 
 ```bash
 curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
   -H "Authorization: Bearer <token>"
 ```
 
-### 6. Generate ops overview
+### 7. Generate ops overview
 
 ```bash
 ATLAS_TOKEN=<token> python3 scripts/ops_report.py overview
@@ -163,6 +177,7 @@ The analytics service composes project, delivery, finance, and alert data into b
 5. `POST /api/v1/platform/audit-retention`
 6. `GET /api/v1/platform/alert-summary`
 7. Inspect per-service health, latency, auth cache, tenant audit history, and alert pressure
+8. Open `/admin` for a gateway-served control room over the same API surface
 
 ## Why This Works As A Portfolio Project
 

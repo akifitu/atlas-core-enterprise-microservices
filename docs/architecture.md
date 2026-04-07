@@ -13,6 +13,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - Caches validated auth contexts briefly to cut repeated identity round trips
 - Injects tenant and user context into downstream requests
 - Exposes platform topology and dependency health
+- Serves the operator-facing `/admin` control room directly from the gateway
 - Keeps external APIs stable even if internal services evolve
 
 ### Identity Service
@@ -87,6 +88,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - Gateway topology reporting makes dependency regressions visible without opening every service separately.
 - Audit event ingestion keeps compliance-relevant mutation history queryable per tenant.
 - Repeated operational alerts are folded into a single open alert with occurrence tracking and escalation.
+- The admin console stays thin by reusing the same gateway APIs rather than introducing a parallel backend-for-frontend service.
 
 ## Tradeoffs
 
