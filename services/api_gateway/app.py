@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import time
 from pathlib import Path
 from threading import Lock
@@ -259,6 +260,15 @@ def authenticate(request: Request) -> Dict[str, Any]:
     return context
 
 
+def actor_headers(actor_context: Dict[str, Any], request_id: str) -> Dict[str, str]:
+    return {
+        "X-Tenant-ID": actor_context["tenant_id"],
+        "X-User-ID": actor_context["user_id"],
+        "X-User-Role": actor_context["role"],
+        "X-Request-ID": request_id,
+    }
+
+
 def proxy_request(
     request: Request,
     service_url_value: str,
@@ -270,14 +280,7 @@ def proxy_request(
     if authenticated:
         context = authenticate(request)
         actor_context = context
-        headers.update(
-            {
-                "X-Tenant-ID": context["tenant_id"],
-                "X-User-ID": context["user_id"],
-                "X-User-Role": context["role"],
-                "X-Request-ID": request.request_id,
-            }
-        )
+        headers.update(actor_headers(context, request.request_id))
     else:
         headers["X-Request-ID"] = request.request_id
 
@@ -405,6 +408,81 @@ def dependency_health(service_name: str, base_url: str, request_id: str) -> Dict
     }
 
 
+def platform_topology_payload(request_id: str) -> Dict[str, Any]:
+    services = {
+        "api-gateway": {
+            "healthy": True,
+            "status_code": 200,
+            "latency_ms": 0.0,
+            "payload": {"status": "ok", "service": SERVICE_NAME},
+        }
+    }
+    for service_name, base_url in DEPENDENCIES.items():
+        services[service_name] = dependency_health(service_name, base_url, request_id)
+
+    degraded_services = [name for name, details in services.items() if not details["healthy"]]
+    return {
+        "generated_at": utc_now(),
+        "services": services,
+        "auth_cache": auth_cache_snapshot(),
+        "audit": audit_stats_snapshot(),
+        "idempotency": idempotency_snapshot(),
+        "summary": {
+            "healthy_services": len(services) - len(degraded_services),
+            "degraded_services": degraded_services,
+        },
+    }
+
+
+def require_dependency_success(status_code: int, payload: Any, dependency_name: str) -> Any:
+    if status_code >= 400:
+        raise AppError(
+            502,
+            "dependency_call_failed",
+            {"dependency": dependency_name, "status_code": status_code, "payload": payload},
+        )
+    return payload
+
+
+def get_control_room_top_n(request: Request) -> int:
+    try:
+        return max(1, min(20, int(request.query_value("top_n", "5") or "5")))
+    except ValueError as exc:
+        raise AppError(400, "invalid_top_n") from exc
+
+
+def fetch_operator_payload(
+    service_name: str,
+    base_url: str,
+    path: str,
+    headers: Dict[str, str],
+) -> Any:
+    return require_dependency_success(
+        *request_json("GET", base_url, path, headers=headers),
+        dependency_name=service_name,
+    )
+
+
+def select_control_room_portfolio(executive_summary_payload: Dict[str, Any], requested_portfolio_id: Optional[str]) -> Dict[str, Optional[str]]:
+    if requested_portfolio_id:
+        return {"portfolio_id": requested_portfolio_id, "selection_mode": "requested"}
+
+    top_risks = executive_summary_payload.get("top_risks") or []
+    if top_risks and isinstance(top_risks[0], dict):
+        portfolio_id = top_risks[0].get("portfolio_id")
+        if portfolio_id:
+            return {"portfolio_id": portfolio_id, "selection_mode": "top_risk"}
+
+    portfolios = executive_summary_payload.get("portfolios") or []
+    if portfolios and isinstance(portfolios[0], dict):
+        portfolio = portfolios[0].get("portfolio") or {}
+        portfolio_id = portfolio.get("id")
+        if portfolio_id:
+            return {"portfolio_id": portfolio_id, "selection_mode": "first_portfolio"}
+
+    return {"portfolio_id": None, "selection_mode": "none"}
+
+
 @app.route("GET", "/health")
 def health(_: Request):
     return 200, {
@@ -439,28 +517,65 @@ def admin_console_script(_: Request):
 @app.route("GET", "/api/v1/platform/topology")
 def topology(request: Request):
     require_platform_operator(request)
-    services = {
-        "api-gateway": {
-            "healthy": True,
-            "status_code": 200,
-            "latency_ms": 0.0,
-            "payload": {"status": "ok", "service": SERVICE_NAME},
-        }
-    }
-    for service_name, base_url in DEPENDENCIES.items():
-        services[service_name] = dependency_health(service_name, base_url, request.request_id)
+    return 200, platform_topology_payload(request.request_id)
 
-    degraded_services = [name for name, details in services.items() if not details["healthy"]]
+
+@app.route("GET", "/api/v1/platform/control-room")
+def control_room(request: Request):
+    actor_context = require_platform_operator(request)
+    top_n = get_control_room_top_n(request)
+    requested_portfolio_id = request.query_value("portfolio_id")
+    headers = actor_headers(actor_context, request.request_id)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        topology_future = executor.submit(platform_topology_payload, request.request_id)
+        alert_summary_future = executor.submit(
+            fetch_operator_payload,
+            "notification-service",
+            NOTIFICATION_SERVICE_URL,
+            "/alerts/summary",
+            headers,
+        )
+        audit_summary_future = executor.submit(
+            fetch_operator_payload,
+            "audit-service",
+            AUDIT_SERVICE_URL,
+            "/summary",
+            headers,
+        )
+        executive_summary_future = executor.submit(
+            fetch_operator_payload,
+            "analytics-service",
+            ANALYTICS_SERVICE_URL,
+            "/executive-summary?{0}".format(urlencode({"top_n": top_n})),
+            headers,
+        )
+
+        topology_payload = topology_future.result()
+        alert_summary_payload = alert_summary_future.result()
+        audit_summary_payload = audit_summary_future.result()
+        executive_summary_payload = executive_summary_future.result()
+
+    portfolio_selection = select_control_room_portfolio(executive_summary_payload, requested_portfolio_id)
+    selected_portfolio_id = portfolio_selection["portfolio_id"]
+    portfolio_dashboard_payload = None
+    if selected_portfolio_id:
+        portfolio_dashboard_payload = fetch_operator_payload(
+            "analytics-service",
+            ANALYTICS_SERVICE_URL,
+            "/dashboard?{0}".format(urlencode({"portfolio_id": selected_portfolio_id})),
+            headers,
+        )
+
     return 200, {
         "generated_at": utc_now(),
-        "services": services,
-        "auth_cache": auth_cache_snapshot(),
-        "audit": audit_stats_snapshot(),
-        "idempotency": idempotency_snapshot(),
-        "summary": {
-            "healthy_services": len(services) - len(degraded_services),
-            "degraded_services": degraded_services,
-        },
+        "topology": topology_payload,
+        "alert_summary": alert_summary_payload["summary"],
+        "audit_summary": audit_summary_payload["summary"],
+        "executive_summary": executive_summary_payload,
+        "selected_portfolio_id": selected_portfolio_id,
+        "selection_mode": portfolio_selection["selection_mode"],
+        "portfolio_dashboard": portfolio_dashboard_payload,
     }
 
 

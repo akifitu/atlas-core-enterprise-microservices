@@ -261,9 +261,74 @@ class AtlasCoreE2ETest(unittest.TestCase):
         js_status, js_type, js_body, js_headers = self.gateway_fetch_raw("/admin/app.js")
         self.assertEqual(js_status, 200)
         self.assertIn("application/javascript", js_type)
-        self.assertIn("/api/v1/platform/topology", js_body)
-        self.assertIn("/api/v1/analytics/executive-summary", js_body)
+        self.assertIn("/api/v1/platform/control-room", js_body)
         self.assertEqual(js_headers["X-Frame-Options"], "DENY")
+
+    def test_control_room_endpoint_aggregates_operator_views(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Control Room Tenant")
+        token = bootstrap["token"]
+
+        portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Control Room Portfolio"},
+            token=token,
+        )["portfolio"]
+        project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(portfolio["id"]),
+            {
+                "name": "Control Room Program",
+                "code": "CONTROL-ROOM",
+                "status": "active",
+                "start_date": "2026-06-01",
+                "target_date": "2026-12-01",
+            },
+            token=token,
+        )["project"]
+        work_item = self.gateway_request(
+            "POST",
+            "/api/v1/delivery/projects/{0}/work-items".format(project["id"]),
+            {
+                "title": "Regional rollout gate",
+                "priority": "critical",
+                "assignee": "PMO",
+            },
+            token=token,
+        )["work_item"]
+        self.gateway_request(
+            "PATCH",
+            "/api/v1/delivery/work-items/{0}/status".format(work_item["id"]),
+            {"status": "blocked", "blocked_reason": "Supplier readiness review still open"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(project["id"]),
+            {"total_budget": 120000, "currency": "USD"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/expenses".format(project["id"]),
+            {"amount": 95000, "category": "integration_partner"},
+            token=token,
+        )
+
+        control_room = self.gateway_request(
+            "GET",
+            "/api/v1/platform/control-room?top_n=3&portfolio_id={0}".format(portfolio["id"]),
+            token=token,
+        )
+
+        self.assertEqual(control_room["selection_mode"], "requested")
+        self.assertEqual(control_room["selected_portfolio_id"], portfolio["id"])
+        self.assertEqual(control_room["topology"]["summary"]["healthy_services"], 8)
+        self.assertGreaterEqual(control_room["alert_summary"]["open_alerts"], 1)
+        self.assertGreaterEqual(control_room["audit_summary"]["total_events"], 5)
+        self.assertEqual(control_room["executive_summary"]["totals"]["projects"], 1)
+        self.assertEqual(control_room["portfolio_dashboard"]["portfolio"]["id"], portfolio["id"])
+        self.assertEqual(control_room["portfolio_dashboard"]["totals"]["blocked_work_items"], 1)
 
     def test_viewer_role_cannot_mutate_portfolio(self) -> None:
         bootstrap = self.bootstrap_admin_session("Atlas Viewer Tenant")

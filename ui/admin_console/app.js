@@ -1,9 +1,5 @@
 const ENDPOINTS = {
-  topology: "/api/v1/platform/topology",
-  alertSummary: "/api/v1/platform/alert-summary",
-  auditSummary: "/api/v1/platform/audit-summary",
-  executiveSummary: "/api/v1/analytics/executive-summary",
-  dashboard: "/api/v1/analytics/dashboard",
+  controlRoom: "/api/v1/platform/control-room",
 };
 
 const STORAGE_KEYS = {
@@ -332,7 +328,7 @@ function renderExecutive(executive) {
     : emptyState("No portfolio risks yet. Create delivery and finance activity to populate the executive queue.");
 }
 
-function populatePortfolioSelect(executive) {
+function populatePortfolioSelect(executive, selectedPortfolioId) {
   const options = ['<option value="">Auto select highest risk portfolio</option>'];
   (executive.portfolios || []).forEach(function (portfolioItem) {
     options.push(
@@ -346,6 +342,7 @@ function populatePortfolioSelect(executive) {
   elements.portfolioSelect.innerHTML = options.join("");
 
   const defaultPortfolioId =
+    selectedPortfolioId ||
     state.selectedPortfolioId ||
     (executive.top_risks && executive.top_risks[0] ? executive.top_risks[0].portfolio_id : "") ||
     (executive.portfolios && executive.portfolios[0] ? executive.portfolios[0].portfolio.id : "");
@@ -392,22 +389,48 @@ function renderPortfolioDashboard(dashboard) {
     : emptyState("No projects in the selected portfolio.");
 }
 
-async function loadPortfolioDashboard() {
-  if (!state.token) {
-    elements.portfolioSummary.innerHTML = "";
-    elements.portfolioDetail.innerHTML = emptyState("Provide a token to fetch portfolio drilldown.");
-    return;
+function clearDashboardViews() {
+  elements.topologySummary.innerHTML = "";
+  elements.topologyGrid.innerHTML = emptyState("Topology will appear after authentication.");
+  elements.alertsSummary.innerHTML = "";
+  elements.alertsDetail.innerHTML = emptyState("Alert data will appear after authentication.");
+  elements.auditSummary.innerHTML = "";
+  elements.auditDetail.innerHTML = emptyState("Audit data will appear after authentication.");
+  elements.executiveSummary.innerHTML = "";
+  elements.executiveDetail.innerHTML = emptyState("Executive data will appear after authentication.");
+  elements.portfolioSummary.innerHTML = "";
+  elements.portfolioDetail.innerHTML = emptyState("Portfolio drilldown will appear after authentication.");
+}
+
+async function fetchControlRoom(selectedPortfolioId) {
+  const query = new URLSearchParams();
+  query.set("top_n", String(state.topN));
+  if (selectedPortfolioId) {
+    query.set("portfolio_id", selectedPortfolioId);
   }
-  if (!state.selectedPortfolioId) {
+  return apiGet(ENDPOINTS.controlRoom + "?" + query.toString());
+}
+
+function renderControlRoom(controlRoom) {
+  state.executive = controlRoom.executive_summary;
+  state.selectedPortfolioId = controlRoom.selected_portfolio_id || "";
+  renderHero(
+    controlRoom.topology,
+    controlRoom.alert_summary,
+    controlRoom.audit_summary,
+    controlRoom.executive_summary
+  );
+  renderTopology(controlRoom.topology);
+  renderAlerts(controlRoom.alert_summary);
+  renderAudit(controlRoom.audit_summary);
+  renderExecutive(controlRoom.executive_summary);
+  populatePortfolioSelect(controlRoom.executive_summary, controlRoom.selected_portfolio_id || "");
+  if (controlRoom.portfolio_dashboard) {
+    renderPortfolioDashboard(controlRoom.portfolio_dashboard);
+  } else {
     elements.portfolioSummary.innerHTML = "";
     elements.portfolioDetail.innerHTML = emptyState("No portfolio available for drilldown yet.");
-    return;
   }
-
-  const dashboard = await apiGet(
-    ENDPOINTS.dashboard + "?portfolio_id=" + encodeURIComponent(state.selectedPortfolioId)
-  );
-  renderPortfolioDashboard(dashboard);
 }
 
 async function refreshControlRoom() {
@@ -419,46 +442,18 @@ async function refreshControlRoom() {
   if (!state.token) {
     setStatus("Bearer token required. Use an admin or portfolio_manager session.", "error");
     elements.heroMetrics.innerHTML = heroCard("Gateway", "Waiting", "Token is required to pull tenant telemetry.", "risk");
-    elements.topologySummary.innerHTML = "";
-    elements.topologyGrid.innerHTML = emptyState("Topology will appear after authentication.");
-    elements.alertsSummary.innerHTML = "";
-    elements.alertsDetail.innerHTML = emptyState("Alert data will appear after authentication.");
-    elements.auditSummary.innerHTML = "";
-    elements.auditDetail.innerHTML = emptyState("Audit data will appear after authentication.");
-    elements.executiveSummary.innerHTML = "";
-    elements.executiveDetail.innerHTML = emptyState("Executive data will appear after authentication.");
-    elements.portfolioSummary.innerHTML = "";
-    elements.portfolioDetail.innerHTML = emptyState("Portfolio drilldown will appear after authentication.");
+    clearDashboardViews();
     return;
   }
 
-  setStatus("Loading topology, alert summary, audit summary, and executive summary.", "loading");
+  setStatus("Loading aggregated control room payload.", "loading");
   try {
-    const topologyPromise = apiGet(ENDPOINTS.topology);
-    const alertPromise = apiGet(ENDPOINTS.alertSummary);
-    const auditPromise = apiGet(ENDPOINTS.auditSummary);
-    const executivePromise = apiGet(
-      ENDPOINTS.executiveSummary + "?top_n=" + encodeURIComponent(String(state.topN))
-    );
-
-    const results = await Promise.all([topologyPromise, alertPromise, auditPromise, executivePromise]);
-    const topology = results[0];
-    const alertPayload = results[1];
-    const auditPayload = results[2];
-    const executive = results[3];
-
-    state.executive = executive;
-    renderHero(topology, alertPayload.summary, auditPayload.summary, executive);
-    renderTopology(topology);
-    renderAlerts(alertPayload.summary);
-    renderAudit(auditPayload.summary);
-    renderExecutive(executive);
-    populatePortfolioSelect(executive);
-    await loadPortfolioDashboard();
+    const controlRoom = await fetchControlRoom(state.selectedPortfolioId);
+    renderControlRoom(controlRoom);
 
     setStatus(
       "Control room updated at " +
-        formatTimestamp(executive.generated_at || topology.generated_at) +
+        formatTimestamp(controlRoom.generated_at || controlRoom.executive_summary.generated_at) +
         ".",
       "success"
     );
@@ -475,9 +470,10 @@ elements.sessionForm.addEventListener("submit", function (event) {
 elements.refreshPortfolio.addEventListener("click", function () {
   state.selectedPortfolioId = elements.portfolioSelect.value;
   persistState();
-  setStatus("Refreshing selected portfolio drilldown.", "loading");
-  loadPortfolioDashboard()
-    .then(function () {
+  setStatus("Refreshing selected portfolio via aggregated control room endpoint.", "loading");
+  fetchControlRoom(state.selectedPortfolioId)
+    .then(function (controlRoom) {
+      renderControlRoom(controlRoom);
       setStatus("Portfolio drilldown updated.", "success");
     })
     .catch(function (error) {
