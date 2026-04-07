@@ -56,10 +56,14 @@ Atlas Core was selected as a multi-tenant enterprise PPM platform using Python s
 
 - Service implementation
 - Cross-service flows
+- Gateway auth cache and platform topology endpoint
+- Request tracing and dependency resilience handling
+- Query indexing and parallel analytics aggregation
 - Alerting and analytics
 - Local runner
 - Demo script
 - End-to-end test
+- CI workflow
 - Documentation
 
 ## Next Logical Extensions

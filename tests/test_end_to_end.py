@@ -4,6 +4,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from pathlib import Path
 from typing import Dict, IO, List, Optional, Tuple
 from urllib import request
@@ -96,18 +97,34 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertLess(status_code, 400, msg="Request failed: {0} {1} => {2} {3}".format(method, path, status_code, response_payload))
         return response_payload
 
-    def test_end_to_end_governance_flow(self) -> None:
-        bootstrap = self.gateway_request(
+    def gateway_request_raw(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[Dict] = None,
+        token: Optional[str] = None,
+    ) -> Tuple[int, Dict]:
+        headers = {}
+        if token:
+            headers["Authorization"] = "Bearer {0}".format(token)
+        return request_json(method, self.gateway_url, path, payload, headers)
+
+    def bootstrap_admin_session(self, tenant_name_prefix: str = "Atlas Test Tenant") -> Dict:
+        suffix = str(uuid.uuid4())[:8]
+        return self.gateway_request(
             "POST",
             "/api/v1/identity/bootstrap-admin",
             {
-                "tenant_name": "Atlas Test Tenant",
-                "tenant_slug": "atlas-test-tenant",
-                "admin_email": "admin@test.local",
+                "tenant_name": "{0} {1}".format(tenant_name_prefix, suffix),
+                "tenant_slug": "atlas-test-{0}".format(suffix),
+                "admin_email": "admin-{0}@test.local".format(suffix),
                 "admin_password": "StrongPass!123",
-                "admin_name": "Test Admin",
+                "admin_name": "Test Admin {0}".format(suffix),
             },
         )
+
+    def test_end_to_end_governance_flow(self) -> None:
+        bootstrap = self.bootstrap_admin_session()
         token = bootstrap["token"]
 
         portfolio = self.gateway_request(
@@ -189,6 +206,64 @@ class AtlasCoreE2ETest(unittest.TestCase):
             token=token,
         )["alert"]
         self.assertEqual(acknowledged["status"], "acked")
+
+    def test_platform_topology_exposes_service_health_and_cache_stats(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Ops Tenant")
+        token = bootstrap["token"]
+
+        self.gateway_request("GET", "/api/v1/portfolio/portfolios", token=token)
+        topology = self.gateway_request("GET", "/api/v1/platform/topology", token=token)
+
+        self.assertEqual(topology["summary"]["healthy_services"], 7)
+        self.assertEqual(topology["summary"]["degraded_services"], [])
+        self.assertGreaterEqual(topology["auth_cache"]["entries"], 1)
+        self.assertGreaterEqual(topology["auth_cache"]["hits"], 1)
+        self.assertIn("api-gateway", topology["services"])
+        self.assertTrue(all(service["healthy"] for service in topology["services"].values()))
+
+    def test_viewer_role_cannot_mutate_portfolio(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Viewer Tenant")
+        admin_token = bootstrap["token"]
+        tenant_id = bootstrap["tenant"]["id"]
+
+        self.gateway_request(
+            "POST",
+            "/api/v1/identity/users",
+            {
+                "email": "viewer@test.local",
+                "password": "StrongPass!123",
+                "display_name": "Read Only Viewer",
+                "role": "viewer",
+            },
+            token=admin_token,
+        )
+
+        viewer_session = self.gateway_request(
+            "POST",
+            "/api/v1/identity/sessions",
+            {
+                "tenant_slug": bootstrap["tenant"]["slug"],
+                "email": "viewer@test.local",
+                "password": "StrongPass!123",
+            },
+        )
+        viewer_token = viewer_session["token"]
+
+        users = self.gateway_request(
+            "GET",
+            "/api/v1/identity/tenants/{0}/users".format(tenant_id),
+            token=admin_token,
+        )["users"]
+        self.assertTrue(any(user["role"] == "viewer" for user in users))
+
+        status_code, payload = self.gateway_request_raw(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Unauthorized Portfolio Attempt"},
+            token=viewer_token,
+        )
+        self.assertEqual(status_code, 403)
+        self.assertEqual(payload["error"], "admin_role_required")
 
 
 if __name__ == "__main__":

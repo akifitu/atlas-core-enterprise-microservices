@@ -31,10 +31,13 @@ The fictional product solves a common enterprise pain point: leadership can fund
 
 - Multi-tenant isolation via `X-Tenant-ID` propagated by the gateway
 - Gateway-centralized bearer token validation
+- Gateway-side auth cache to reduce repeated identity lookups
 - SQLite-backed independent persistence per service
 - Synchronous service-to-service calls for analytics and alert creation
+- Request tracing via `X-Request-ID`
 - Clear internal and external API separation
 - Executable end-to-end test that boots the full stack
+- GitHub Actions CI for compile and full-stack verification
 
 ## Repository Layout
 
@@ -74,6 +77,16 @@ The script bootstraps a tenant, creates users, creates a portfolio and projects,
 PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m unittest tests.test_end_to_end -v
 ```
 
+### 4. Inspect platform topology
+
+Once you have a bearer token:
+
+```bash
+ATLAS_TOKEN=<token> python3 scripts/ops_report.py
+```
+
+This returns service health, gateway auth cache metrics, and a platform summary from `GET /api/v1/platform/topology`.
+
 ## Main Flows
 
 ### Tenant and Auth
@@ -102,6 +115,11 @@ PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m unittest tests.test_end_to_end -v
 
 The analytics service composes project, delivery, finance, and alert data into a single executive view with project health.
 
+### Platform Operations
+
+1. `GET /api/v1/platform/topology`
+2. Inspect per-service health, latency, and gateway auth cache metrics
+
 ## Why This Works As A Portfolio Project
 
 - It demonstrates service decomposition beyond toy CRUD examples.
@@ -114,3 +132,4 @@ The analytics service composes project, delivery, finance, and alert data into a
 - `docs/architecture.md`
 - `docs/implementation-plan.md`
 - `infra/docker-compose.yml`
+- `.github/workflows/ci.yml`

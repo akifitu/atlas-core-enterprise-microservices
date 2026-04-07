@@ -10,7 +10,9 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 
 - Public entrypoint for clients
 - Validates bearer tokens with `identity-service`
+- Caches validated auth contexts briefly to cut repeated identity round trips
 - Injects tenant and user context into downstream requests
+- Exposes platform topology and dependency health
 - Keeps external APIs stable even if internal services evolve
 
 ### Identity Service
@@ -48,7 +50,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 
 1. A client sends a request to `api-gateway`.
 2. The gateway validates the bearer token via `identity-service`.
-3. The gateway forwards the request with `X-Tenant-ID`, `X-User-ID`, and `X-User-Role`.
+3. The gateway forwards the request with `X-Tenant-ID`, `X-User-ID`, `X-User-Role`, and `X-Request-ID`.
 4. Domain services execute tenant-scoped logic against their own SQLite databases.
 5. Delivery and finance publish operational alerts by calling `notification-service`.
 6. `analytics-service` composes read models across services for executive reporting.
@@ -63,8 +65,15 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 ## Security Model
 
 - Bearer token validation is centralized in the gateway.
+- Short-lived auth caching reduces repeat validation overhead without changing tenant boundaries.
 - Tenant isolation is enforced through forwarded context.
 - Services still validate actor context and role requirements locally.
+
+## Performance Notes
+
+- SQLite indexes were added around tenant-scoped and project-scoped lookup paths.
+- Analytics aggregates project summaries in parallel for larger portfolios.
+- Gateway topology reporting makes dependency regressions visible without opening every service separately.
 
 ## Tradeoffs
 
