@@ -407,6 +407,25 @@ paths:
       responses:
         "200":
           description: Topology report
+  /api/v1/platform/control-room:
+    get:
+      tags: [Platform]
+      summary: Read the aggregated operator control room payload
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: top_n
+          schema:
+            type: integer
+            default: 5
+        - in: query
+          name: portfolio_id
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Aggregated control room payload with topology, summaries, and portfolio drilldown
   /api/v1/platform/audit-events:
     get:
       tags: [Platform]

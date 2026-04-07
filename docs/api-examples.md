@@ -110,6 +110,11 @@ curl -s http://127.0.0.1:7000/api/v1/platform/topology \
 ```
 
 ```bash
+curl -s "http://127.0.0.1:7000/api/v1/platform/control-room?top_n=5&portfolio_id=$PORTFOLIO_ID" \
+  -H "Authorization: Bearer $ATLAS_TOKEN"
+```
+
+```bash
 curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
   -H "Authorization: Bearer $ATLAS_TOKEN"
 ```
@@ -141,13 +146,17 @@ curl -s http://127.0.0.1:7000/api/v1/platform/alert-summary \
 
 ## Open The Admin Control Room
 
-Open `http://127.0.0.1:7000/admin` in a browser and paste an admin or `portfolio_manager` token. The UI loads its data from:
+Open `http://127.0.0.1:7000/admin` in a browser and paste an admin or `portfolio_manager` token. The UI loads its primary payload from:
 
-- `GET /api/v1/platform/topology`
-- `GET /api/v1/platform/alert-summary`
-- `GET /api/v1/platform/audit-summary`
-- `GET /api/v1/analytics/executive-summary`
-- `GET /api/v1/analytics/dashboard?portfolio_id=<id>`
+- `GET /api/v1/platform/control-room?top_n=<n>&portfolio_id=<id>`
+
+That aggregate response already includes:
+
+- topology
+- alert summary
+- audit summary
+- executive summary
+- selected portfolio dashboard
 
 ## Operator Shortcuts
 
