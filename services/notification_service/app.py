@@ -110,6 +110,26 @@ def find_open_alert(tenant_id: str, project_id: str, source: str, title: str) ->
     )
 
 
+def filtered_alerts(actor: Dict[str, str], request: Request) -> Dict[str, Any]:
+    project_id = request.query_value("project_id")
+    status = request.query_value("status")
+    if status and status not in ("open", "acked"):
+        raise AppError(400, "invalid_status", {"status": status})
+
+    query = "SELECT * FROM alerts WHERE tenant_id = ?"
+    params = [actor["tenant_id"]]
+    if project_id:
+        query += " AND project_id = ?"
+        params.append(project_id)
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    return {
+        "query": query,
+        "params": params,
+    }
+
+
 @app.route("GET", "/health")
 def health(_: Request):
     return 200, {
@@ -192,23 +212,81 @@ def create_alert(request: Request):
 @app.route("GET", "/alerts")
 def list_alerts(request: Request):
     actor = require_actor(request)
-    project_id = request.query_value("project_id")
-    status = request.query_value("status")
-    if status and status not in ("open", "acked"):
-        raise AppError(400, "invalid_status", {"status": status})
-
-    query = "SELECT * FROM alerts WHERE tenant_id = ?"
-    params = [actor["tenant_id"]]
-    if project_id:
-        query += " AND project_id = ?"
-        params.append(project_id)
-    if status:
-        query += " AND status = ?"
-        params.append(status)
+    filters = filtered_alerts(actor, request)
+    query = filters["query"]
+    params = filters["params"]
     query += " ORDER BY created_at DESC"
 
     alerts = db.fetchall(query, params)
     return 200, {"alerts": alerts}
+
+
+@app.route("GET", "/alerts/summary")
+def alerts_summary(request: Request):
+    actor = require_actor(request)
+    filters = filtered_alerts(actor, request)
+    alerts = db.fetchall(filters["query"] + " ORDER BY created_at DESC", filters["params"])
+
+    by_status: Dict[str, int] = {}
+    by_severity: Dict[str, int] = {}
+    by_source: Dict[str, int] = {}
+    by_project: Dict[str, Dict[str, Any]] = {}
+    total_occurrences = 0
+    escalated_open_alerts = 0
+
+    for alert in alerts:
+        status = str(alert["status"])
+        severity = str(alert["severity"])
+        source = str(alert["source"])
+        project_id = str(alert["project_id"])
+        occurrence_count = int(alert.get("occurrence_count") or 1)
+
+        by_status[status] = by_status.get(status, 0) + 1
+        by_severity[severity] = by_severity.get(severity, 0) + 1
+        by_source[source] = by_source.get(source, 0) + 1
+        total_occurrences += occurrence_count
+        if status == "open" and alert.get("escalated_at"):
+            escalated_open_alerts += 1
+
+        project_bucket = by_project.setdefault(
+            project_id,
+            {
+                "project_id": project_id,
+                "alerts": 0,
+                "open_alerts": 0,
+                "critical_alerts": 0,
+                "occurrences": 0,
+            },
+        )
+        project_bucket["alerts"] += 1
+        project_bucket["occurrences"] += occurrence_count
+        if status == "open":
+            project_bucket["open_alerts"] += 1
+        if severity == "critical":
+            project_bucket["critical_alerts"] += 1
+
+    noisy_projects = sorted(
+        by_project.values(),
+        key=lambda item: (-item["occurrences"], -item["critical_alerts"], item["project_id"]),
+    )[:5]
+
+    return 200, {
+        "summary": {
+            "total_alerts": len(alerts),
+            "total_occurrences": total_occurrences,
+            "deduplicated_occurrences": max(0, total_occurrences - len(alerts)),
+            "open_alerts": by_status.get("open", 0),
+            "acked_alerts": by_status.get("acked", 0),
+            "critical_open_alerts": len(
+                [alert for alert in alerts if alert["status"] == "open" and alert["severity"] == "critical"]
+            ),
+            "escalated_open_alerts": escalated_open_alerts,
+            "by_status": by_status,
+            "by_severity": by_severity,
+            "by_source": by_source,
+            "noisy_projects": noisy_projects,
+        }
+    }
 
 
 @app.route("PATCH", "/alerts/{alert_id}/ack")

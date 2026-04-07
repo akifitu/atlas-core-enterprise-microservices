@@ -566,6 +566,141 @@ class AtlasCoreE2ETest(unittest.TestCase):
         self.assertEqual(status_code, 404)
         self.assertEqual(payload["error"], "project_not_found")
 
+    def test_audit_summary_export_and_retention_controls(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Retention Tenant")
+        token = bootstrap["token"]
+
+        portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Retention Portfolio"},
+            token=token,
+        )["portfolio"]
+        project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(portfolio["id"]),
+            {
+                "name": "Retention Program",
+                "code": "RETENTION-PROGRAM",
+                "status": "active",
+                "start_date": "2026-07-01",
+                "target_date": "2026-11-01",
+            },
+            token=token,
+        )["project"]
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(project["id"]),
+            {"total_budget": 120000, "currency": "USD"},
+            token=token,
+        )
+
+        summary = self.gateway_request("GET", "/api/v1/platform/audit-summary", token=token)["summary"]
+        self.assertGreaterEqual(summary["total_events"], 3)
+        self.assertIn("portfolio-service", summary["by_service"])
+        self.assertIn("finance-service", summary["by_service"])
+
+        export_payload = self.gateway_request(
+            "GET",
+            "/api/v1/platform/audit-export?limit=10",
+            token=token,
+        )
+        self.assertGreaterEqual(export_payload["count"], 3)
+        self.assertEqual(export_payload["summary"]["total_events"], summary["total_events"])
+
+        dry_run = self.gateway_request(
+            "POST",
+            "/api/v1/platform/audit-retention",
+            {"retention_days": 0, "dry_run": True},
+            token=token,
+        )
+        self.assertTrue(dry_run["dry_run"])
+        self.assertGreaterEqual(dry_run["would_delete"], 3)
+
+        purge = self.gateway_request(
+            "POST",
+            "/api/v1/platform/audit-retention",
+            {"retention_days": 0, "dry_run": False},
+            token=token,
+        )
+        self.assertFalse(purge["dry_run"])
+        self.assertGreaterEqual(purge["deleted_count"], 3)
+
+        events_after = self.gateway_request(
+            "GET",
+            "/api/v1/platform/audit-events?limit=10",
+            token=token,
+        )["events"]
+        self.assertEqual(len(events_after), 1)
+        self.assertEqual(events_after[0]["service_name"], "audit-service")
+
+    def test_alert_summary_aggregates_occurrences_and_sources(self) -> None:
+        bootstrap = self.bootstrap_admin_session("Atlas Alert Summary Tenant")
+        token = bootstrap["token"]
+
+        portfolio = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios",
+            {"name": "Summary Portfolio"},
+            token=token,
+        )["portfolio"]
+        project = self.gateway_request(
+            "POST",
+            "/api/v1/portfolio/portfolios/{0}/projects".format(portfolio["id"]),
+            {
+                "name": "Summary Program",
+                "code": "SUMMARY-PROGRAM",
+                "status": "active",
+                "start_date": "2026-07-01",
+                "target_date": "2026-12-01",
+            },
+            token=token,
+        )["project"]
+        work_item = self.gateway_request(
+            "POST",
+            "/api/v1/delivery/projects/{0}/work-items".format(project["id"]),
+            {"title": "Vendor readiness", "priority": "high", "assignee": "Ops"},
+            token=token,
+        )["work_item"]
+
+        for reason in ("Missing access", "Missing access", "Missing access"):
+            self.gateway_request(
+                "PATCH",
+                "/api/v1/delivery/work-items/{0}/status".format(work_item["id"]),
+                {"status": "blocked", "blocked_reason": reason},
+                token=token,
+            )
+
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/budget".format(project["id"]),
+            {"total_budget": 100000, "currency": "USD"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/expenses".format(project["id"]),
+            {"amount": 90000, "category": "integrator"},
+            token=token,
+        )
+        self.gateway_request(
+            "POST",
+            "/api/v1/finance/projects/{0}/expenses".format(project["id"]),
+            {"amount": 20000, "category": "change_request"},
+            token=token,
+        )
+
+        summary = self.gateway_request("GET", "/api/v1/platform/alert-summary", token=token)["summary"]
+        self.assertEqual(summary["total_alerts"], 2)
+        self.assertEqual(summary["total_occurrences"], 5)
+        self.assertEqual(summary["deduplicated_occurrences"], 3)
+        self.assertEqual(summary["critical_open_alerts"], 2)
+        self.assertEqual(summary["escalated_open_alerts"], 2)
+        self.assertEqual(summary["by_source"]["delivery-service"], 1)
+        self.assertEqual(summary["by_source"]["finance-service"], 1)
+        self.assertEqual(summary["noisy_projects"][0]["project_id"], project["id"])
+        self.assertEqual(summary["noisy_projects"][0]["occurrences"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

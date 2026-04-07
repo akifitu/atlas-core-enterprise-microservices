@@ -414,6 +414,30 @@ def list_audit_events(request: Request):
     return proxy_request(request, AUDIT_SERVICE_URL, "/events")
 
 
+@app.route("GET", "/api/v1/platform/audit-summary")
+def audit_summary(request: Request):
+    require_platform_operator(request)
+    return proxy_request(request, AUDIT_SERVICE_URL, "/summary")
+
+
+@app.route("GET", "/api/v1/platform/audit-export")
+def audit_export(request: Request):
+    require_platform_operator(request)
+    return proxy_request(request, AUDIT_SERVICE_URL, "/events/export")
+
+
+@app.route("POST", "/api/v1/platform/audit-retention")
+def audit_retention(request: Request):
+    require_platform_operator(request)
+    return proxy_request(request, AUDIT_SERVICE_URL, "/retention/purge")
+
+
+@app.route("GET", "/api/v1/platform/alert-summary")
+def alert_summary(request: Request):
+    require_platform_operator(request)
+    return proxy_request(request, NOTIFICATION_SERVICE_URL, "/alerts/summary")
+
+
 @app.route("POST", "/api/v1/identity/bootstrap-admin")
 def bootstrap_admin(request: Request):
     headers = {"X-Request-ID": request.request_id}

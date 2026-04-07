@@ -1,6 +1,7 @@
 import json
 import uuid
-from typing import Any, Dict
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Tuple
 
 from shared.atlas_core.config import env, utc_now
 from shared.atlas_core.context import require_actor
@@ -87,6 +88,13 @@ def require_audit_reader(request: Request) -> Dict[str, str]:
     return actor
 
 
+def require_audit_admin(request: Request) -> Dict[str, str]:
+    actor = require_audit_reader(request)
+    if actor["role"] != "admin":
+        raise AppError(403, "audit_admin_role_required")
+    return actor
+
+
 def deserialize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     metadata_json = event.get("metadata_json")
     parsed_metadata = json.loads(metadata_json) if isinstance(metadata_json, str) else {}
@@ -94,6 +102,82 @@ def deserialize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     result["metadata"] = parsed_metadata
     result.pop("metadata_json", None)
     return result
+
+
+def query_filters(request: Request, actor: Dict[str, str]) -> Tuple[str, List[Any]]:
+    query = " FROM audit_events WHERE tenant_id = ?"
+    params: List[Any] = [actor["tenant_id"]]
+
+    service_name = request.query_value("service_name")
+    resource = request.query_value("resource")
+    outcome = request.query_value("outcome")
+    actor_user_id = request.query_value("actor_user_id")
+    created_before = request.query_value("created_before")
+    created_after = request.query_value("created_after")
+
+    if service_name:
+        query += " AND service_name = ?"
+        params.append(service_name)
+    if resource:
+        query += " AND resource = ?"
+        params.append(resource)
+    if outcome:
+        query += " AND outcome = ?"
+        params.append(outcome)
+    if actor_user_id:
+        query += " AND actor_user_id = ?"
+        params.append(actor_user_id)
+    if created_before:
+        query += " AND created_at <= ?"
+        params.append(created_before)
+    if created_after:
+        query += " AND created_at >= ?"
+        params.append(created_after)
+
+    return query, params
+
+
+def bucket_counts(rows: List[Dict[str, Any]], key_name: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for row in rows:
+        counts[str(row[key_name])] = int(row["count"])
+    return counts
+
+
+def audit_summary_payload(request: Request, actor: Dict[str, str]) -> Dict[str, Any]:
+    query_suffix, params = query_filters(request, actor)
+    events = db.fetchall(
+        "SELECT service_name, resource, outcome, actor_role, created_at" + query_suffix + " ORDER BY created_at DESC",
+        params,
+    )
+    by_service_rows = db.fetchall(
+        "SELECT service_name, COUNT(*) AS count" + query_suffix + " GROUP BY service_name ORDER BY count DESC",
+        params,
+    )
+    by_resource_rows = db.fetchall(
+        "SELECT resource, COUNT(*) AS count" + query_suffix + " GROUP BY resource ORDER BY count DESC",
+        params,
+    )
+    by_outcome_rows = db.fetchall(
+        "SELECT outcome, COUNT(*) AS count" + query_suffix + " GROUP BY outcome ORDER BY count DESC",
+        params,
+    )
+    by_role_rows = db.fetchall(
+        "SELECT actor_role, COUNT(*) AS count" + query_suffix + " GROUP BY actor_role ORDER BY count DESC",
+        params,
+    )
+
+    return {
+        "total_events": len(events),
+        "time_range": {
+            "oldest_event_at": events[-1]["created_at"] if events else None,
+            "newest_event_at": events[0]["created_at"] if events else None,
+        },
+        "by_service": bucket_counts(by_service_rows, "service_name"),
+        "by_resource": bucket_counts(by_resource_rows, "resource"),
+        "by_outcome": bucket_counts(by_outcome_rows, "outcome"),
+        "by_actor_role": bucket_counts(by_role_rows, "actor_role"),
+    }
 
 
 @app.route("GET", "/health")
@@ -156,30 +240,73 @@ def list_events(request: Request):
     except ValueError as exc:
         raise AppError(400, "invalid_limit") from exc
 
-    service_name = request.query_value("service_name")
-    resource = request.query_value("resource")
-    outcome = request.query_value("outcome")
-    actor_user_id = request.query_value("actor_user_id")
-
-    query = "SELECT * FROM audit_events WHERE tenant_id = ?"
-    params = [actor["tenant_id"]]
-    if service_name:
-        query += " AND service_name = ?"
-        params.append(service_name)
-    if resource:
-        query += " AND resource = ?"
-        params.append(resource)
-    if outcome:
-        query += " AND outcome = ?"
-        params.append(outcome)
-    if actor_user_id:
-        query += " AND actor_user_id = ?"
-        params.append(actor_user_id)
-    query += " ORDER BY created_at DESC LIMIT ?"
+    query, params = query_filters(request, actor)
+    query = "SELECT *" + query + " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
 
     events = db.fetchall(query, params)
     return 200, {"events": [deserialize_event(event) for event in events]}
+
+
+@app.route("GET", "/summary")
+def summary(request: Request):
+    actor = require_audit_reader(request)
+    return 200, {"summary": audit_summary_payload(request, actor)}
+
+
+@app.route("GET", "/events/export")
+def export_events(request: Request):
+    actor = require_audit_reader(request)
+    limit_raw = request.query_value("limit", "500")
+    try:
+        limit = max(1, min(1000, int(limit_raw or "500")))
+    except ValueError as exc:
+        raise AppError(400, "invalid_limit") from exc
+
+    query, params = query_filters(request, actor)
+    events = db.fetchall("SELECT *" + query + " ORDER BY created_at DESC LIMIT ?", params + [limit])
+    return 200, {
+        "exported_at": utc_now(),
+        "count": len(events),
+        "events": [deserialize_event(event) for event in events],
+        "summary": audit_summary_payload(request, actor),
+    }
+
+
+@app.route("POST", "/retention/purge")
+def purge_events(request: Request):
+    actor = require_audit_admin(request)
+    payload = require_json_object(request)
+    retention_days = payload.get("retention_days")
+    dry_run = bool(payload.get("dry_run", False))
+    if not isinstance(retention_days, int) or retention_days < 0:
+        raise AppError(400, "invalid_retention_days")
+
+    cutoff = (datetime.utcnow() - timedelta(days=retention_days)).replace(microsecond=0).isoformat() + "Z"
+    candidate_count = db.scalar(
+        "SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND created_at <= ?",
+        (actor["tenant_id"], cutoff),
+    ) or 0
+
+    if dry_run:
+        return 200, {
+            "dry_run": True,
+            "retention_days": retention_days,
+            "cutoff": cutoff,
+            "would_delete": int(candidate_count),
+        }
+
+    db.execute(
+        "DELETE FROM audit_events WHERE tenant_id = ? AND created_at <= ?",
+        (actor["tenant_id"], cutoff),
+    )
+    return 200, {
+        "dry_run": False,
+        "retention_days": retention_days,
+        "cutoff": cutoff,
+        "deleted_count": int(candidate_count),
+        "summary": audit_summary_payload(request, actor),
+    }
 
 
 if __name__ == "__main__":
