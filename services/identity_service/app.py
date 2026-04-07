@@ -1,3 +1,4 @@
+import hmac
 import uuid
 from typing import Any, Dict
 
@@ -5,13 +6,14 @@ from shared.atlas_core.config import env, utc_now
 from shared.atlas_core.context import require_admin
 from shared.atlas_core.db import Database
 from shared.atlas_core.http import AppError, Request, ServiceApp, run_service
-from shared.atlas_core.security import hash_password, issue_token, verify_password
+from shared.atlas_core.security import hash_password, issue_token, read_bearer_token, verify_password
 
 
 SERVICE_NAME = "identity-service"
 HOST = env("IDENTITY_SERVICE_HOST", "127.0.0.1")
 PORT = env("IDENTITY_SERVICE_PORT", 7001, int)
 DATABASE_PATH = env("IDENTITY_DB_PATH", "runtime/identity-service.db")
+BOOTSTRAP_TOKEN = env("IDENTITY_BOOTSTRAP_TOKEN", "")
 
 db = Database(DATABASE_PATH or "runtime/identity-service.db")
 app = ServiceApp(SERVICE_NAME)
@@ -109,6 +111,18 @@ def health(_: Request):
 
 @app.route("POST", "/bootstrap-admin")
 def bootstrap_admin(request: Request):
+    existing_tenant_count = db.scalar("SELECT COUNT(*) FROM tenants") or 0
+    supplied_bootstrap_token = request.header("x-bootstrap-token", "") or ""
+    if BOOTSTRAP_TOKEN:
+        if not hmac.compare_digest(supplied_bootstrap_token, BOOTSTRAP_TOKEN):
+            raise AppError(403, "bootstrap_token_required")
+    elif existing_tenant_count > 0:
+        raise AppError(
+            403,
+            "bootstrap_disabled",
+            {"reason": "set IDENTITY_BOOTSTRAP_TOKEN to allow additional tenant bootstraps"},
+        )
+
     payload = require_json_object(request)
     tenant_name = require_field(payload, "tenant_name")
     tenant_slug = require_field(payload, "tenant_slug").lower().replace(" ", "-")
@@ -174,11 +188,11 @@ def create_session(request: Request):
     return 201, build_session_response(token, tenant or {}, user)
 
 
-@app.route("GET", "/validate")
+@app.route("POST", "/validate")
 def validate_session(request: Request):
-    token = request.query_value("token")
+    token = read_bearer_token(request.header("authorization"))
     if not token:
-        raise AppError(400, "token_query_parameter_required")
+        raise AppError(401, "bearer_token_required")
 
     session = db.fetchone(
         """

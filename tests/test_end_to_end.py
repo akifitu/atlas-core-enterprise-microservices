@@ -22,6 +22,7 @@ class ServiceHarness:
     def __init__(self) -> None:
         self.runtime_dir = Path(tempfile.mkdtemp(prefix="atlas-core-", dir="/tmp"))
         self.env = build_runtime_environment(ROOT_DIR, self.runtime_dir)
+        self.env["IDENTITY_BOOTSTRAP_TOKEN"] = "atlas-test-bootstrap-token"
         self.processes: List[Tuple[subprocess.Popen, Path]] = []
         self.log_files: List[IO[str]] = []
 
@@ -117,8 +118,9 @@ class AtlasCoreE2ETest(unittest.TestCase):
 
     def bootstrap_admin_session(self, tenant_name_prefix: str = "Atlas Test Tenant") -> Dict:
         suffix = str(uuid.uuid4())[:8]
-        return self.gateway_request(
+        status_code, payload = request_json(
             "POST",
+            self.gateway_url,
             "/api/v1/identity/bootstrap-admin",
             {
                 "tenant_name": "{0} {1}".format(tenant_name_prefix, suffix),
@@ -127,7 +129,10 @@ class AtlasCoreE2ETest(unittest.TestCase):
                 "admin_password": "StrongPass!123",
                 "admin_name": "Test Admin {0}".format(suffix),
             },
+            {"X-Bootstrap-Token": self.harness.env["IDENTITY_BOOTSTRAP_TOKEN"]},
         )
+        self.assertLess(status_code, 400, msg="Bootstrap failed: {0} {1}".format(status_code, payload))
+        return payload
 
     def test_end_to_end_governance_flow(self) -> None:
         bootstrap = self.bootstrap_admin_session()

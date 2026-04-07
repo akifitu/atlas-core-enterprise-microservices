@@ -64,6 +64,14 @@ python3 scripts/dev_runner.py --reset-data
 
 This starts all services locally and writes logs under `runtime/logs/`.
 
+For repeatable or non-local bootstrap flows, set a bootstrap secret first:
+
+```bash
+export IDENTITY_BOOTSTRAP_TOKEN='replace-with-a-long-random-secret'
+```
+
+If `IDENTITY_BOOTSTRAP_TOKEN` is unset, only the very first tenant bootstrap is allowed. Additional bootstrap attempts are rejected.
+
 ### 2. Execute the demo scenario
 
 In a second terminal:
@@ -103,7 +111,7 @@ curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
 
 1. `POST /api/v1/identity/bootstrap-admin`
 2. `POST /api/v1/identity/sessions`
-3. Gateway validates the bearer token against `identity-service`
+3. Gateway validates the bearer token against `identity-service` via `POST /validate`
 
 ### Portfolio Governance
 

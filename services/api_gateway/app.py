@@ -1,8 +1,8 @@
 import time
 from threading import Lock
 from typing import Any, Dict, Optional
-from urllib.parse import quote, urlencode
 import json
+from urllib.parse import urlencode
 
 from shared.atlas_core.config import env, service_url, utc_now
 from shared.atlas_core.http import AppError, Request, ServiceApp, run_service
@@ -200,10 +200,13 @@ def authenticate(request: Request) -> Dict[str, Any]:
         AUTH_CACHE_STATS["misses"] += 1
 
     status_code, payload = request_json(
-        "GET",
+        "POST",
         IDENTITY_SERVICE_URL,
-        "/validate?token={0}".format(quote(token)),
-        headers={"X-Request-ID": request.request_id},
+        "/validate",
+        headers={
+            "Authorization": "Bearer {0}".format(token),
+            "X-Request-ID": request.request_id,
+        },
     )
     if status_code >= 400:
         with AUTH_CACHE_LOCK:
@@ -413,7 +416,18 @@ def list_audit_events(request: Request):
 
 @app.route("POST", "/api/v1/identity/bootstrap-admin")
 def bootstrap_admin(request: Request):
-    return proxy_request(request, IDENTITY_SERVICE_URL, "/bootstrap-admin", authenticated=False)
+    headers = {"X-Request-ID": request.request_id}
+    bootstrap_token = request.header("x-bootstrap-token")
+    if bootstrap_token:
+        headers["X-Bootstrap-Token"] = bootstrap_token
+    status_code, payload = request_json(
+        request.method,
+        IDENTITY_SERVICE_URL,
+        "/bootstrap-admin",
+        payload=request.body if isinstance(request.body, dict) else None,
+        headers=headers,
+    )
+    return status_code, payload
 
 
 @app.route("POST", "/api/v1/identity/sessions")

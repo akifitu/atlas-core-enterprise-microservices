@@ -15,6 +15,7 @@ from shared.atlas_core.service_client import request_json
 
 
 GATEWAY_URL = env("API_GATEWAY_URL", "http://127.0.0.1:7000")
+BOOTSTRAP_TOKEN = env("IDENTITY_BOOTSTRAP_TOKEN", "")
 
 
 def gateway_request(
@@ -26,6 +27,8 @@ def gateway_request(
     headers = {}
     if token:
         headers["Authorization"] = "Bearer {0}".format(token)
+    if path == "/api/v1/identity/bootstrap-admin" and BOOTSTRAP_TOKEN:
+        headers["X-Bootstrap-Token"] = BOOTSTRAP_TOKEN
     status_code, response_payload = request_json(method, GATEWAY_URL or "http://127.0.0.1:7000", path, payload, headers)
     if status_code >= 400:
         raise RuntimeError("Gateway request failed: {0} {1} -> {2} {3}".format(method, path, status_code, response_payload))
