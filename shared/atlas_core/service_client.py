@@ -38,3 +38,13 @@ def request_json(
         raw_body = exc.read()
         body = json.loads(raw_body.decode("utf-8")) if raw_body else None
         return exc.code, body
+    except error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        return 503, {
+            "error": "dependency_unreachable",
+            "details": {
+                "reason": str(reason),
+                "base_url": normalized_base,
+                "path": path,
+            },
+        }

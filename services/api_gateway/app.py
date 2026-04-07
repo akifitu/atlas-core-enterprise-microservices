@@ -1,7 +1,9 @@
+import time
+from threading import Lock
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urlencode
 
-from shared.atlas_core.config import env, service_url
+from shared.atlas_core.config import env, service_url, utc_now
 from shared.atlas_core.http import AppError, Request, ServiceApp, run_service
 from shared.atlas_core.security import read_bearer_token
 from shared.atlas_core.service_client import request_json
@@ -16,8 +18,56 @@ DELIVERY_SERVICE_URL = service_url("delivery-service", 7003)
 FINANCE_SERVICE_URL = service_url("finance-service", 7004)
 NOTIFICATION_SERVICE_URL = service_url("notification-service", 7005)
 ANALYTICS_SERVICE_URL = service_url("analytics-service", 7006)
+AUTH_CACHE_TTL_SECONDS = env("API_GATEWAY_AUTH_CACHE_TTL_SECONDS", 30, int) or 30
+AUTH_CACHE_MAX_ENTRIES = env("API_GATEWAY_AUTH_CACHE_MAX_ENTRIES", 1024, int) or 1024
 
 app = ServiceApp(SERVICE_NAME)
+AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
+AUTH_CACHE_STATS = {"hits": 0, "misses": 0}
+AUTH_CACHE_LOCK = Lock()
+
+DEPENDENCIES = {
+    "identity-service": IDENTITY_SERVICE_URL,
+    "portfolio-service": PORTFOLIO_SERVICE_URL,
+    "delivery-service": DELIVERY_SERVICE_URL,
+    "finance-service": FINANCE_SERVICE_URL,
+    "notification-service": NOTIFICATION_SERVICE_URL,
+    "analytics-service": ANALYTICS_SERVICE_URL,
+}
+
+
+def _prune_auth_cache(now: float) -> None:
+    expired_tokens = [token for token, item in AUTH_CACHE.items() if item["expires_at"] <= now]
+    for token in expired_tokens:
+        AUTH_CACHE.pop(token, None)
+
+    if len(AUTH_CACHE) < AUTH_CACHE_MAX_ENTRIES:
+        return
+
+    overflow = len(AUTH_CACHE) - AUTH_CACHE_MAX_ENTRIES + 1
+    oldest_tokens = sorted(AUTH_CACHE.items(), key=lambda item: item[1]["expires_at"])[:overflow]
+    for token, _ in oldest_tokens:
+        AUTH_CACHE.pop(token, None)
+
+
+def auth_cache_snapshot() -> Dict[str, Any]:
+    now = time.time()
+    with AUTH_CACHE_LOCK:
+        _prune_auth_cache(now)
+        return {
+            "hits": AUTH_CACHE_STATS["hits"],
+            "misses": AUTH_CACHE_STATS["misses"],
+            "entries": len(AUTH_CACHE),
+            "ttl_seconds": AUTH_CACHE_TTL_SECONDS,
+            "max_entries": AUTH_CACHE_MAX_ENTRIES,
+        }
+
+
+def require_platform_operator(request: Request) -> Dict[str, Any]:
+    context = authenticate(request)
+    if context["role"] not in ("admin", "portfolio_manager"):
+        raise AppError(403, "platform_operator_role_required")
+    return context
 
 
 def authenticate(request: Request) -> Dict[str, Any]:
@@ -25,14 +75,34 @@ def authenticate(request: Request) -> Dict[str, Any]:
     if not token:
         raise AppError(401, "bearer_token_required")
 
+    now = time.time()
+    with AUTH_CACHE_LOCK:
+        _prune_auth_cache(now)
+        cached = AUTH_CACHE.get(token)
+        if cached and cached["expires_at"] > now:
+            AUTH_CACHE_STATS["hits"] += 1
+            return dict(cached["context"])
+        AUTH_CACHE_STATS["misses"] += 1
+
     status_code, payload = request_json(
         "GET",
         IDENTITY_SERVICE_URL,
         "/validate?token={0}".format(quote(token)),
+        headers={"X-Request-ID": request.request_id},
     )
     if status_code >= 400:
+        with AUTH_CACHE_LOCK:
+            AUTH_CACHE.pop(token, None)
         raise AppError(401, "invalid_token", {"identity_response": payload})
-    return payload["context"]
+
+    context = payload["context"]
+    with AUTH_CACHE_LOCK:
+        _prune_auth_cache(time.time())
+        AUTH_CACHE[token] = {
+            "context": dict(context),
+            "expires_at": time.time() + AUTH_CACHE_TTL_SECONDS,
+        }
+    return context
 
 
 def proxy_request(
@@ -49,8 +119,11 @@ def proxy_request(
                 "X-Tenant-ID": context["tenant_id"],
                 "X-User-ID": context["user_id"],
                 "X-User-Role": context["role"],
+                "X-Request-ID": request.request_id,
             }
         )
+    else:
+        headers["X-Request-ID"] = request.request_id
 
     query_suffix = ""
     if request.query:
@@ -66,9 +139,54 @@ def proxy_request(
     return status_code, payload
 
 
+def dependency_health(service_name: str, base_url: str, request_id: str) -> Dict[str, Any]:
+    started_at = time.perf_counter()
+    status_code, payload = request_json(
+        "GET",
+        base_url,
+        "/health",
+        headers={"X-Request-ID": request_id},
+        timeout=2,
+    )
+    latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    healthy = status_code < 400 and isinstance(payload, dict) and payload.get("status") == "ok"
+    return {
+        "healthy": healthy,
+        "status_code": status_code,
+        "latency_ms": latency_ms,
+        "payload": payload,
+    }
+
+
 @app.route("GET", "/health")
 def health(_: Request):
-    return 200, {"status": "ok", "service": SERVICE_NAME}
+    return 200, {"status": "ok", "service": SERVICE_NAME, "auth_cache": auth_cache_snapshot()}
+
+
+@app.route("GET", "/api/v1/platform/topology")
+def topology(request: Request):
+    require_platform_operator(request)
+    services = {
+        "api-gateway": {
+            "healthy": True,
+            "status_code": 200,
+            "latency_ms": 0.0,
+            "payload": {"status": "ok", "service": SERVICE_NAME},
+        }
+    }
+    for service_name, base_url in DEPENDENCIES.items():
+        services[service_name] = dependency_health(service_name, base_url, request.request_id)
+
+    degraded_services = [name for name, details in services.items() if not details["healthy"]]
+    return 200, {
+        "generated_at": utc_now(),
+        "services": services,
+        "auth_cache": auth_cache_snapshot(),
+        "summary": {
+            "healthy_services": len(services) - len(degraded_services),
+            "degraded_services": degraded_services,
+        },
+    }
 
 
 @app.route("POST", "/api/v1/identity/bootstrap-admin")

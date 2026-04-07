@@ -34,6 +34,12 @@ def migrate() -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE INDEX IF NOT EXISTS idx_work_items_tenant_project_created_at
+        ON work_items (tenant_id, project_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_work_items_tenant_project_status
+        ON work_items (tenant_id, project_id, status);
         """
     )
 

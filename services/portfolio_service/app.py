@@ -41,6 +41,15 @@ def migrate() -> None:
             UNIQUE(tenant_id, code),
             FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
         );
+
+        CREATE INDEX IF NOT EXISTS idx_portfolios_tenant_created_at
+        ON portfolios (tenant_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_projects_tenant_portfolio_created_at
+        ON projects (tenant_id, portfolio_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_projects_tenant_status
+        ON projects (tenant_id, status);
         """
     )
 

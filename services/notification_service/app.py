@@ -32,6 +32,12 @@ def migrate() -> None:
             acknowledged_at TEXT,
             acknowledged_by TEXT
         );
+
+        CREATE INDEX IF NOT EXISTS idx_alerts_tenant_status_created_at
+        ON alerts (tenant_id, status, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_alerts_tenant_project_status_created_at
+        ON alerts (tenant_id, project_id, status, created_at);
         """
     )
 

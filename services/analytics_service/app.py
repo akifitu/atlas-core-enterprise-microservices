@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 from urllib.parse import urlencode
 
@@ -16,13 +17,15 @@ FINANCE_SERVICE_URL = service_url("finance-service", 7004)
 NOTIFICATION_SERVICE_URL = service_url("notification-service", 7005)
 
 app = ServiceApp(SERVICE_NAME)
+HEALTH_ORDER = {"critical": 0, "at_risk": 1, "healthy": 2, "not_started": 3}
 
 
-def internal_headers(actor: Dict[str, str]) -> Dict[str, str]:
+def internal_headers(actor: Dict[str, str], request_id: str) -> Dict[str, str]:
     return {
         "X-Tenant-ID": actor["tenant_id"],
         "X-User-ID": actor["user_id"],
         "X-User-Role": actor["role"],
+        "X-Request-ID": request_id,
     }
 
 
@@ -46,6 +49,38 @@ def derive_project_health(finance_totals: Dict[str, Any], delivery_totals: Dict[
     return "healthy"
 
 
+def build_project_summary(project: Dict[str, Any], headers: Dict[str, str], alerts_by_project: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    delivery_payload = require_success(
+        *request_json(
+            "GET",
+            DELIVERY_SERVICE_URL,
+            "/projects/{0}/summary".format(project["id"]),
+            headers=headers,
+        ),
+        dependency_name="delivery-service",
+    )
+    finance_payload = require_success(
+        *request_json(
+            "GET",
+            FINANCE_SERVICE_URL,
+            "/projects/{0}/status".format(project["id"]),
+            headers=headers,
+        ),
+        dependency_name="finance-service",
+    )
+
+    project_alerts = alerts_by_project.get(project["id"], [])
+    delivery_totals = delivery_payload["totals"]
+    finance_totals = finance_payload["totals"]
+    return {
+        "project": project,
+        "delivery": delivery_totals,
+        "finance": finance_totals,
+        "open_alerts": project_alerts,
+        "health": derive_project_health(finance_totals, delivery_totals, project_alerts),
+    }
+
+
 @app.route("GET", "/health")
 def health(_: Request):
     return 200, {"status": "ok", "service": SERVICE_NAME}
@@ -58,7 +93,7 @@ def dashboard(request: Request):
     if not portfolio_id:
         raise AppError(400, "portfolio_id_query_parameter_required")
 
-    headers = internal_headers(actor)
+    headers = internal_headers(actor, request.request_id)
     portfolio_payload = require_success(
         *request_json(
             "GET",
@@ -79,52 +114,30 @@ def dashboard(request: Request):
     )
 
     open_alerts = alert_payload["alerts"]
-    projects_summary = []
-    total_budget = 0.0
-    total_spent = 0.0
-    total_work_items = 0
-    total_blocked = 0
-    total_done = 0
+    alerts_by_project: Dict[str, List[Dict[str, Any]]] = {}
+    for alert in open_alerts:
+        alerts_by_project.setdefault(alert["project_id"], []).append(alert)
 
-    for project in portfolio_payload["projects"]:
-        delivery_payload = require_success(
-            *request_json(
-                "GET",
-                DELIVERY_SERVICE_URL,
-                "/projects/{0}/summary".format(project["id"]),
-                headers=headers,
-            ),
-            dependency_name="delivery-service",
-        )
-        finance_payload = require_success(
-            *request_json(
-                "GET",
-                FINANCE_SERVICE_URL,
-                "/projects/{0}/status".format(project["id"]),
-                headers=headers,
-            ),
-            dependency_name="finance-service",
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(portfolio_payload["projects"]) or 1))) as executor:
+        projects_summary = list(
+            executor.map(
+                lambda project: build_project_summary(project, headers, alerts_by_project),
+                portfolio_payload["projects"],
+            )
         )
 
-        project_alerts = [alert for alert in open_alerts if alert["project_id"] == project["id"]]
-        delivery_totals = delivery_payload["totals"]
-        finance_totals = finance_payload["totals"]
-
-        total_budget += finance_totals["budget_total"]
-        total_spent += finance_totals["spent"]
-        total_work_items += delivery_totals["count"]
-        total_blocked += delivery_totals["blocked"]
-        total_done += delivery_totals["done"]
-
-        projects_summary.append(
-            {
-                "project": project,
-                "delivery": delivery_totals,
-                "finance": finance_totals,
-                "open_alerts": project_alerts,
-                "health": derive_project_health(finance_totals, delivery_totals, project_alerts),
-            }
-        )
+    projects_summary.sort(key=lambda item: (HEALTH_ORDER.get(item["health"], 99), item["project"]["name"]))
+    total_budget = round(sum(item["finance"]["budget_total"] for item in projects_summary), 2)
+    total_spent = round(sum(item["finance"]["spent"] for item in projects_summary), 2)
+    total_work_items = sum(item["delivery"]["count"] for item in projects_summary)
+    total_blocked = sum(item["delivery"]["blocked"] for item in projects_summary)
+    total_done = sum(item["delivery"]["done"] for item in projects_summary)
+    health_distribution = {
+        "critical": len([item for item in projects_summary if item["health"] == "critical"]),
+        "at_risk": len([item for item in projects_summary if item["health"] == "at_risk"]),
+        "healthy": len([item for item in projects_summary if item["health"] == "healthy"]),
+        "not_started": len([item for item in projects_summary if item["health"] == "not_started"]),
+    }
 
     completion_rate = round((total_done / total_work_items) * 100, 2) if total_work_items else 0.0
     budget_utilization = round((total_spent / total_budget) * 100, 2) if total_budget else 0.0
@@ -141,6 +154,7 @@ def dashboard(request: Request):
             "spent": round(total_spent, 2),
             "budget_utilization_pct": budget_utilization,
             "open_alerts": len(open_alerts),
+            "health_distribution": health_distribution,
         },
         "projects": projects_summary,
     }

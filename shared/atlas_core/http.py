@@ -1,5 +1,6 @@
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -22,6 +23,7 @@ class Request:
     headers: Dict[str, str]
     body: Any
     path_params: Dict[str, str]
+    request_id: str
 
     def query_value(self, name: str, default: Optional[str] = None) -> Optional[str]:
         values = self.query.get(name)
@@ -66,14 +68,16 @@ class ServiceApp:
         return decorator
 
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
+        request_id = handler.headers.get("X-Request-ID") or str(uuid.uuid4())
         try:
-            status_code, payload = self._dispatch(handler)
+            status_code, payload = self._dispatch(handler, request_id)
         except AppError as exc:
             status_code = exc.status_code
             payload = {
                 "error": exc.message,
                 "details": exc.details,
                 "service": self.service_name,
+                "request_id": request_id,
             }
         except Exception as exc:  # pragma: no cover - defensive boundary
             status_code = 500
@@ -81,6 +85,7 @@ class ServiceApp:
                 "error": "internal_server_error",
                 "details": {"exception": str(exc)},
                 "service": self.service_name,
+                "request_id": request_id,
             }
 
         body = json.dumps(payload).encode("utf-8")
@@ -88,10 +93,11 @@ class ServiceApp:
         handler.send_header("Content-Type", "application/json")
         handler.send_header("Content-Length", str(len(body)))
         handler.send_header("X-Service-Name", self.service_name)
+        handler.send_header("X-Request-ID", request_id)
         handler.end_headers()
         handler.wfile.write(body)
 
-    def _dispatch(self, handler: BaseHTTPRequestHandler) -> Tuple[int, Any]:
+    def _dispatch(self, handler: BaseHTTPRequestHandler, request_id: str) -> Tuple[int, Any]:
         parsed_url = urlparse(handler.path)
         path = parsed_url.path.rstrip("/") or "/"
 
@@ -123,6 +129,7 @@ class ServiceApp:
             headers={key.lower(): value for key, value in handler.headers.items()},
             body=payload,
             path_params=path_params,
+            request_id=request_id,
         )
         return selected_route.handler(request)
 

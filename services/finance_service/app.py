@@ -40,6 +40,12 @@ def migrate() -> None:
             category TEXT NOT NULL,
             recorded_at TEXT NOT NULL
         );
+
+        CREATE INDEX IF NOT EXISTS idx_project_expenses_tenant_project_recorded_at
+        ON project_expenses (tenant_id, project_id, recorded_at);
+
+        CREATE INDEX IF NOT EXISTS idx_project_expenses_tenant_project_category
+        ON project_expenses (tenant_id, project_id, category);
         """
     )
 

@@ -47,6 +47,15 @@ def migrate() -> None:
             FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        CREATE INDEX IF NOT EXISTS idx_users_tenant_created_at
+        ON users (tenant_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_users_tenant_role
+        ON users (tenant_id, role);
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_tenant_user
+        ON sessions (tenant_id, user_id);
         """
     )
 
