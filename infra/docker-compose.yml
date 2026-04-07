@@ -1,0 +1,142 @@
+version: "3.9"
+
+services:
+  identity-service:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/identity_service/app.py"]
+    ports:
+      - "7001:7001"
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONPATH: /app
+      IDENTITY_SERVICE_HOST: 0.0.0.0
+      IDENTITY_SERVICE_PORT: 7001
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
+
+  portfolio-service:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/portfolio_service/app.py"]
+    ports:
+      - "7002:7002"
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONPATH: /app
+      PORTFOLIO_SERVICE_HOST: 0.0.0.0
+      PORTFOLIO_SERVICE_PORT: 7002
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
+
+  delivery-service:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/delivery_service/app.py"]
+    ports:
+      - "7003:7003"
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONPATH: /app
+      DELIVERY_SERVICE_HOST: 0.0.0.0
+      DELIVERY_SERVICE_PORT: 7003
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
+
+  finance-service:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/finance_service/app.py"]
+    ports:
+      - "7004:7004"
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONPATH: /app
+      FINANCE_SERVICE_HOST: 0.0.0.0
+      FINANCE_SERVICE_PORT: 7004
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
+
+  notification-service:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/notification_service/app.py"]
+    ports:
+      - "7005:7005"
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONPATH: /app
+      NOTIFICATION_SERVICE_HOST: 0.0.0.0
+      NOTIFICATION_SERVICE_PORT: 7005
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
+
+  analytics-service:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/analytics_service/app.py"]
+    ports:
+      - "7006:7006"
+    volumes:
+      - ..:/app
+    environment:
+      PYTHONPATH: /app
+      ANALYTICS_SERVICE_HOST: 0.0.0.0
+      ANALYTICS_SERVICE_PORT: 7006
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
+
+  api-gateway:
+    image: python:3.9-slim
+    working_dir: /app
+    command: ["python3", "services/api_gateway/app.py"]
+    ports:
+      - "7000:7000"
+    volumes:
+      - ..:/app
+    depends_on:
+      - identity-service
+      - portfolio-service
+      - delivery-service
+      - finance-service
+      - notification-service
+      - analytics-service
+    environment:
+      PYTHONPATH: /app
+      API_GATEWAY_HOST: 0.0.0.0
+      API_GATEWAY_PORT: 7000
+      IDENTITY_SERVICE_URL: http://identity-service:7001
+      PORTFOLIO_SERVICE_URL: http://portfolio-service:7002
+      DELIVERY_SERVICE_URL: http://delivery-service:7003
+      FINANCE_SERVICE_URL: http://finance-service:7004
+      NOTIFICATION_SERVICE_URL: http://notification-service:7005
+      ANALYTICS_SERVICE_URL: http://analytics-service:7006
