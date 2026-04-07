@@ -42,6 +42,7 @@ The fictional product solves a common enterprise pain point: leadership can fund
 - Request tracing via `X-Request-ID`
 - Clear internal and external API separation
 - Gateway-served admin control room for live operator visibility
+- Operator action panel for audit export and retention controls
 - Executable end-to-end test that boots the full stack
 - GitHub Actions CI for compile and full-stack verification
 
@@ -112,7 +113,7 @@ After bootstrap or `scripts/demo_flow.py`, open:
 http://127.0.0.1:7000/admin
 ```
 
-Paste the bearer token into the control room and it will load an aggregated operator payload from `GET /api/v1/platform/control-room`, including topology, alert summary, audit summary, executive summary, and portfolio drilldown.
+Paste the bearer token into the control room and it will load an aggregated operator payload from `GET /api/v1/platform/control-room`, including topology, alert summary, audit summary, executive summary, and portfolio drilldown. The same UI now also runs audit export plus retention preview/apply actions through `POST /api/v1/platform/control-room/actions`.
 
 ### 6. Read audit trail
 
@@ -132,6 +133,7 @@ This combines platform topology, alert summary, and audit summary in one operato
 Common operator shortcuts:
 
 ```bash
+make ops-control-room
 make ops-topology
 make ops-alert-summary
 make ops-audit-summary
@@ -172,13 +174,14 @@ The analytics service composes project, delivery, finance, and alert data into b
 
 1. `GET /api/v1/platform/topology`
 2. `GET /api/v1/platform/control-room?top_n=<n>&portfolio_id=<id>`
-3. `GET /api/v1/platform/audit-events`
-4. `GET /api/v1/platform/audit-summary`
-5. `GET /api/v1/platform/audit-export`
-6. `POST /api/v1/platform/audit-retention`
-7. `GET /api/v1/platform/alert-summary`
-8. Inspect per-service health, latency, auth cache, tenant audit history, and alert pressure
-9. Open `/admin` for a gateway-served control room over the same API surface
+3. `POST /api/v1/platform/control-room/actions`
+4. `GET /api/v1/platform/audit-events`
+5. `GET /api/v1/platform/audit-summary`
+6. `GET /api/v1/platform/audit-export`
+7. `POST /api/v1/platform/audit-retention`
+8. `GET /api/v1/platform/alert-summary`
+9. Inspect per-service health, latency, auth cache, tenant audit history, and alert pressure
+10. Open `/admin` for a gateway-served control room over the same API surface
 
 ## Why This Works As A Portfolio Project
 

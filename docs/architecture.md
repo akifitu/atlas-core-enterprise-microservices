@@ -14,6 +14,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - Injects tenant and user context into downstream requests
 - Exposes platform topology and dependency health
 - Aggregates operator-facing control room data in a single platform endpoint
+- Orchestrates control-room operator actions for audit export and retention workflows
 - Serves the operator-facing `/admin` control room directly from the gateway
 - Keeps external APIs stable even if internal services evolve
 
@@ -90,6 +91,7 @@ Atlas Core represents a multi-tenant Project Portfolio Management platform for e
 - Audit event ingestion keeps compliance-relevant mutation history queryable per tenant.
 - Repeated operational alerts are folded into a single open alert with occurrence tracking and escalation.
 - The control room reduces client fan-out by aggregating topology, governance, and executive views in the gateway before the browser renders them.
+- Operator actions stay gateway-mediated, so the browser never needs to understand downstream audit-service routes directly.
 
 ## Tradeoffs
 

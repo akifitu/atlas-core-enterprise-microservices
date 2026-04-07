@@ -426,6 +426,37 @@ paths:
       responses:
         "200":
           description: Aggregated control room payload with topology, summaries, and portfolio drilldown
+  /api/v1/platform/control-room/actions:
+    post:
+      tags: [Platform]
+      summary: Execute control room operator actions for audit export and retention workflows
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [audit_export, audit_retention_dry_run, audit_retention_apply]
+                top_n:
+                  type: integer
+                  default: 5
+                portfolio_id:
+                  type: string
+                limit:
+                  type: integer
+                  description: Used for `audit_export`
+                retention_days:
+                  type: integer
+                  description: Used for retention actions
+      responses:
+        "200":
+          description: Action result plus refreshed control room payload
   /api/v1/platform/audit-events:
     get:
       tags: [Platform]

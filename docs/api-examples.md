@@ -115,6 +115,18 @@ curl -s "http://127.0.0.1:7000/api/v1/platform/control-room?top_n=5&portfolio_id
 ```
 
 ```bash
+curl -s http://127.0.0.1:7000/api/v1/platform/control-room/actions \
+  -H "Authorization: Bearer $ATLAS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "action": "audit_retention_dry_run",
+    "retention_days": 30,
+    "top_n": 5,
+    "portfolio_id": "'"$PORTFOLIO_ID"'"
+  }'
+```
+
+```bash
 curl -s "http://127.0.0.1:7000/api/v1/platform/audit-events?limit=20" \
   -H "Authorization: Bearer $ATLAS_TOKEN"
 ```
@@ -158,10 +170,15 @@ That aggregate response already includes:
 - executive summary
 - selected portfolio dashboard
 
+The UI also runs governance actions through:
+
+- `POST /api/v1/platform/control-room/actions`
+
 ## Operator Shortcuts
 
 ```bash
 make ops
+make ops-control-room
 make ops-alert-summary
 make ops-audit-summary
 make ops-audit-export
